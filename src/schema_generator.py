@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 from .llm_client import LLMClient
+from .logger import logger
 
 class SchemaGenerator:
     """Schema 生成器，用于从文档块中提取实体并生成 OpenSPG 格式的 Schema"""
@@ -54,28 +55,62 @@ class SchemaGenerator:
     
     def extract_entities_from_chunk(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
         """从文档块中提取实体"""
+        chunk_content = chunk.get('content', '')
+        logger.info(f"开始从文档块提取实体，内容长度: {len(chunk_content)} 字符")
+        logger.debug(f"文档块内容预览: {chunk_content[:200]}{'...' if len(chunk_content) > 200 else ''}")
         
         # 使用 LLM 提取实体
-        raw_entities = self.llm_client.extract_entities_from_text(chunk['content'])
+        logger.debug("调用 LLM 客户端提取原始实体")
+        raw_entities = self.llm_client.extract_entities_from_text(chunk_content)
+        logger.info(f"LLM 返回 {len(raw_entities)} 个原始实体")
         
         # 标准化实体格式
+        logger.debug("开始标准化实体格式")
         standardized_entities = []
         
-        for entity in raw_entities:
+        for i, entity in enumerate(raw_entities):
+            logger.debug(f"标准化实体 {i+1}/{len(raw_entities)}: {entity.get('name', 'Unknown')}")
             standardized_entity = self._standardize_entity(entity)
             if standardized_entity:
                 standardized_entities.append(standardized_entity)
+                logger.debug(f"实体 {entity.get('name', 'Unknown')} 标准化成功")
+            else:
+                logger.warning(f"实体 {entity.get('name', 'Unknown')} 标准化失败，已跳过")
+        
+        logger.success(f"文档块实体提取完成，成功标准化 {len(standardized_entities)}/{len(raw_entities)} 个实体")
+        
+        # 记录标准化后的实体名称
+        if standardized_entities:
+            entity_names = [entity.get('name', 'Unknown') for entity in standardized_entities]
+            logger.info(f"标准化后的实体: {', '.join(entity_names)}")
         
         return standardized_entities
     
     def suggest_entity_deletions(self, existing_entities: List[Dict], document_chunks: List[Dict]) -> List[Dict[str, str]]:
         """建议删除的实体"""
+        logger.info(f"开始分析实体删除建议，现有实体: {len(existing_entities)} 个，文档块: {len(document_chunks)} 个")
+        
+        # 记录现有实体名称
+        if existing_entities:
+            entity_names = [entity.get('name', 'Unknown') for entity in existing_entities]
+            logger.debug(f"现有实体列表: {', '.join(entity_names)}")
         
         # 提取文档内容
-        chunk_contents = [chunk['content'] for chunk in document_chunks]
+        logger.debug("提取文档块内容")
+        chunk_contents = [chunk.get('content', '') if isinstance(chunk, dict) else str(chunk) for chunk in document_chunks]
+        total_content_length = sum(len(content) for content in chunk_contents)
+        logger.debug(f"文档内容总长度: {total_content_length} 字符")
         
         # 使用 LLM 分析并建议删除
+        logger.debug("调用 LLM 分析实体删除建议")
         suggestions = self.llm_client.suggest_entity_deletions(existing_entities, chunk_contents)
+        
+        logger.success(f"实体删除建议分析完成，建议删除 {len(suggestions)} 个实体")
+        
+        # 记录建议删除的实体
+        if suggestions:
+            suggested_names = [suggestion.get('name', 'Unknown') for suggestion in suggestions]
+            logger.info(f"建议删除的实体: {', '.join(suggested_names)}")
         
         return suggestions
     

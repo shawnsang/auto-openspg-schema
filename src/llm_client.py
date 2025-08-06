@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Union
 import json
 import time
 from abc import ABC, abstractmethod
+from .logger import logger
 
 class BaseLLMClient(ABC):
     """LLM 客户端基类"""
@@ -29,20 +30,44 @@ class OpenAIClient(BaseLLMClient):
     
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """OpenAI 聊天完成"""
+        # 记录完整的提示词
+        logger.info(f"OpenAI API 调用开始 - 模型: {self.model_name}")
+        logger.debug(f"请求参数: temperature={kwargs.get('temperature', 0.1)}, max_tokens={kwargs.get('max_tokens', 4000)}")
+        
+        # 记录完整的消息内容
+        for i, message in enumerate(messages):
+            role = message.get('role', 'unknown')
+            content = message.get('content', '')
+            logger.info(f"消息 {i+1} [{role}]: {content[:200]}{'...' if len(content) > 200 else ''}")
+            if len(content) > 200:
+                logger.debug(f"消息 {i+1} 完整内容: {content}")
+        
         for attempt in range(self.max_retries):
             try:
+                logger.debug(f"发送请求到 OpenAI (尝试 {attempt + 1}/{self.max_retries})")
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
                     temperature=kwargs.get('temperature', 0.1),
                     max_tokens=kwargs.get('max_tokens', 4000)
                 )
-                return response.choices[0].message.content.strip()
+                
+                result = response.choices[0].message.content.strip()
+                logger.success(f"OpenAI API 调用成功，返回 {len(result)} 字符")
+                logger.info(f"响应内容: {result[:200]}{'...' if len(result) > 200 else ''}")
+                if len(result) > 200:
+                    logger.debug(f"完整响应: {result}")
+                
+                return result
             except Exception as e:
-                print(f"OpenAI 调用失败 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}")
+                error_msg = f"OpenAI 调用失败 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}"
+                logger.warning(error_msg)
                 if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay * (attempt + 1))
+                    sleep_time = self.retry_delay * (attempt + 1)
+                    logger.debug(f"等待 {sleep_time} 秒后重试")
+                    time.sleep(sleep_time)
                 else:
+                    logger.error(f"OpenAI API 调用最终失败: {str(e)}")
                     raise e
     
     def test_connection(self) -> bool:
@@ -68,11 +93,27 @@ class OllamaClient(BaseLLMClient):
     
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """Ollama 聊天完成"""
+        # 记录完整的提示词
+        logger.info(f"Ollama API 调用开始 - 模型: {self.model_name}")
+        logger.debug(f"请求参数: temperature={kwargs.get('temperature', 0.1)}, max_tokens={kwargs.get('max_tokens', 4000)}")
+        
+        # 记录原始消息
+        for i, message in enumerate(messages):
+            role = message.get('role', 'unknown')
+            content = message.get('content', '')
+            logger.info(f"消息 {i+1} [{role}]: {content[:200]}{'...' if len(content) > 200 else ''}")
+            if len(content) > 200:
+                logger.debug(f"消息 {i+1} 完整内容: {content}")
+        
         # 转换消息格式为 Ollama 格式
         prompt = self._convert_messages_to_prompt(messages)
+        logger.debug(f"转换后的提示词: {prompt[:300]}{'...' if len(prompt) > 300 else ''}")
+        if len(prompt) > 300:
+            logger.debug(f"完整提示词: {prompt}")
         
         for attempt in range(self.max_retries):
             try:
+                logger.debug(f"发送请求到 Ollama (尝试 {attempt + 1}/{self.max_retries})")
                 response = requests.post(
                     f"{self.base_url}/api/generate",
                     json={
@@ -88,11 +129,21 @@ class OllamaClient(BaseLLMClient):
                 )
                 response.raise_for_status()
                 result = response.json()
-                return result.get('response', '').strip()
+                
+                response_text = result.get('response', '').strip()
+                logger.success(f"Ollama API 调用成功，返回 {len(response_text)} 字符")
+                logger.info(f"响应内容: {response_text[:200]}{'...' if len(response_text) > 200 else ''}")
+                if len(response_text) > 200:
+                    logger.debug(f"完整响应: {response_text}")
+                
+                return response_text
             except Exception as e:
-                print(f"Ollama 调用失败 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}")
+                error_msg = f"Ollama 调用失败 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}"
+                logger.warning(error_msg)
                 if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay * (attempt + 1))
+                    sleep_time = self.retry_delay * (attempt + 1)
+                    logger.debug(f"等待 {sleep_time} 秒后重试")
+                    time.sleep(sleep_time)
                 else:
                     raise e
     
@@ -155,15 +206,28 @@ class LLMClient:
     
     def extract_entities_from_text(self, text: str) -> List[Dict[str, Any]]:
         """从文本中提取实体信息"""
+        logger.info(f"开始实体提取，文本长度: {len(text)} 字符")
+        logger.debug(f"输入文本: {text[:300]}{'...' if len(text) > 300 else ''}")
         
         messages = self._create_entity_extraction_messages(text)
+        logger.debug(f"构建了 {len(messages)} 条消息用于实体提取")
         
         try:
+            logger.debug("调用 LLM 进行实体提取")
             response = self.client.chat_completion(messages)
+            logger.debug(f"LLM 返回响应，开始解析实体")
             entities = self._parse_entity_response(response)
+            logger.success(f"实体提取完成，共提取到 {len(entities)} 个实体")
+            
+            # 记录提取到的实体名称
+            if entities:
+                entity_names = [entity.get('name', 'Unknown') for entity in entities]
+                logger.info(f"提取到的实体: {', '.join(entity_names)}")
+            
             return entities
         except Exception as e:
-            print(f"实体提取失败: {str(e)}")
+            error_msg = f"实体提取失败: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             return []
     
     def suggest_entity_deletions(self, existing_entities: List[Dict], document_chunks: List[str]) -> List[Dict[str, str]]:
