@@ -170,7 +170,138 @@ class SchemaManager:
                         index_line = f"\t\t\tindex: {prop_def['index']}"
                         lines.append(index_line)
         
+        # 关系部分
+        relations = entity.get('relations', {})
+        if relations:
+            lines.append("\trelations:")
+            
+            for relation_key, relation_def in relations.items():
+                if isinstance(relation_def, dict) and 'name' in relation_def and 'target' in relation_def:
+                    relation_line = f"\t\t{relation_def['name']}: {relation_def['target']}"
+                    lines.append(relation_line)
+                else:
+                    # 兼容旧格式
+                    relation_line = f"\t\t{relation_key}: {relation_def}"
+                    lines.append(relation_line)
+        
         return '\n'.join(lines)
+    
+    def validate_and_update_relations(self) -> Dict[str, Any]:
+        """验证并更新所有实体的relations，将中文实体名称替换为英文实体名称"""
+        
+        validation_result = {
+            'updated_entities': [],
+            'invalid_relations': [],
+            'warnings': []
+        }
+        
+        # 构建实体名称映射表（中文名 -> 英文名）
+        chinese_to_english = {}
+        english_names = set()
+        
+        for entity in self.entities.values():
+            chinese_name = entity.get('chinese_name', '')
+            english_name = entity.get('name', '')
+            
+            if chinese_name and english_name:
+                chinese_to_english[chinese_name] = english_name
+                english_names.add(english_name)
+        
+        # 遍历所有实体，验证和更新relations
+        for entity_key, entity in self.entities.items():
+            relations = entity.get('relations', {})
+            if not relations:
+                continue
+                
+            updated_relations = {}
+            entity_updated = False
+            
+            for relation_key, relation_def in relations.items():
+                if isinstance(relation_def, dict) and 'target' in relation_def:
+                    target = relation_def['target']
+                    original_target = target
+                    
+                    # 检查target是否为中文实体名称，需要转换为英文名称
+                    if target in chinese_to_english:
+                        # 找到对应的英文名称
+                        english_target = chinese_to_english[target]
+                        relation_def['target'] = english_target
+                        entity_updated = True
+                        
+                        validation_result['updated_entities'].append({
+                            'entity': entity.get('name', entity_key),
+                            'relation': relation_key,
+                            'old_target': original_target,
+                            'new_target': english_target
+                        })
+                    
+                    # 检查target是否为有效的实体名称
+                    elif target not in english_names and target not in chinese_to_english:
+                        validation_result['invalid_relations'].append({
+                            'entity': entity.get('name', entity_key),
+                            'relation': relation_key,
+                            'target': target,
+                            'reason': '目标实体不存在'
+                        })
+                    
+                    updated_relations[relation_key] = relation_def
+                
+                else:
+                    # 兼容旧格式：relation_key: target_value
+                    target = relation_def
+                    original_target = target
+                    
+                    if target in chinese_to_english:
+                        # 转换为新格式并更新target
+                        english_target = chinese_to_english[target]
+                        updated_relations[relation_key] = {
+                            'name': relation_key,
+                            'target': english_target
+                        }
+                        entity_updated = True
+                        
+                        validation_result['updated_entities'].append({
+                            'entity': entity.get('name', entity_key),
+                            'relation': relation_key,
+                            'old_target': original_target,
+                            'new_target': english_target
+                        })
+                    
+                    elif target not in english_names and target not in chinese_to_english:
+                        validation_result['invalid_relations'].append({
+                            'entity': entity.get('name', entity_key),
+                            'relation': relation_key,
+                            'target': target,
+                            'reason': '目标实体不存在'
+                        })
+                        
+                        # 保持原格式但标记为无效
+                        updated_relations[relation_key] = relation_def
+                    
+                    else:
+                        # target已经是英文名称，转换为新格式
+                        updated_relations[relation_key] = {
+                            'name': relation_key,
+                            'target': target
+                        }
+            
+            # 如果有更新，保存到实体中
+            if entity_updated or updated_relations != relations:
+                self.entities[entity_key]['relations'] = updated_relations
+                self.last_modified = datetime.now()
+        
+        return validation_result
+    
+    def get_entity_by_chinese_name(self, chinese_name: str) -> Optional[Dict[str, Any]]:
+        """根据中文名称查找实体"""
+        for entity in self.entities.values():
+            if entity.get('chinese_name') == chinese_name:
+                return entity
+        return None
+    
+    def get_entity_by_english_name(self, english_name: str) -> Optional[Dict[str, Any]]:
+        """根据英文名称查找实体"""
+        return self.entities.get(english_name)
     
     def _build_standard_properties(self, custom_properties: Dict[str, Any] = None) -> Dict[str, Any]:
         """构建标准属性"""
@@ -185,7 +316,7 @@ class SchemaManager:
                 'type': 'Text'
             },
             'semanticType': {
-                'name': 'semanticType(semanticType)',
+                'name': 'semanticType(语义类型)',
                 'type': 'Text',
                 'index': 'Text'
             }
@@ -195,10 +326,19 @@ class SchemaManager:
         if custom_properties:
             for prop_name, prop_value in custom_properties.items():
                 if prop_name not in properties:
-                    properties[prop_name] = {
-                        'name': f"{prop_name}({prop_name})",
-                        'type': 'Text'
-                    }
+                    # 检查属性名是否已经包含中文说明
+                    if '(' in prop_name and ')' in prop_name:
+                        # 已经是正确格式（如："material (材料)"），直接使用
+                        properties[prop_name] = {
+                            'name': prop_name,
+                            'type': 'Text'
+                        }
+                    else:
+                        # 旧格式，添加中文说明
+                        properties[prop_name] = {
+                            'name': f"{prop_name}({prop_name})",
+                            'type': 'Text'
+                        }
         
         return properties
     

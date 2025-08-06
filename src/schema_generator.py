@@ -50,7 +50,7 @@ class SchemaGenerator:
                 'type': 'Text'
             },
             'semanticType': {
-                'name': 'semanticType(semanticType)',
+                'name': 'semanticType(语义类型)',
                 'type': 'Text',
                 'index': 'Text'
             }

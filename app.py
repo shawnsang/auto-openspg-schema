@@ -437,6 +437,41 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
         # 更新进度
         progress_bar.progress((i + 1) / len(uploaded_files))
     
+    # 在所有文档处理完成后，验证和更新relations
+    logger.info("开始验证和更新实体relations")
+    status_text.text("正在验证和更新实体关系...")
+    
+    try:
+        validation_result = st.session_state.schema_manager.validate_and_update_relations()
+        
+        # 显示验证结果
+        if validation_result['updated_entities']:
+            logger.info(f"更新了 {len(validation_result['updated_entities'])} 个实体的relations")
+            st.success(f"✅ 成功更新了 {len(validation_result['updated_entities'])} 个实体的关系引用")
+            
+            # 显示更新详情
+            with st.expander("查看关系更新详情"):
+                for update in validation_result['updated_entities']:
+                    st.write(f"**{update['entity']}** - {update['relation']}: {update['old_target']} → {update['new_target']}")
+        
+        if validation_result['invalid_relations']:
+            logger.warning(f"发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
+            st.warning(f"⚠️ 发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
+            
+            # 显示无效关系详情
+            with st.expander("查看无效关系详情"):
+                for invalid in validation_result['invalid_relations']:
+                    st.write(f"**{invalid['entity']}** - {invalid['relation']}: {invalid['target']} ({invalid['reason']})")
+        
+        if not validation_result['updated_entities'] and not validation_result['invalid_relations']:
+            logger.info("所有实体关系都已正确")
+            st.info("ℹ️ 所有实体关系都已正确，无需更新")
+            
+    except Exception as e:
+        error_msg = f"验证relations时出错: {str(e)}"
+        logger.error(error_msg)
+        st.error(error_msg)
+    
     # 处理完成总结
     total_files = len(uploaded_files)
     successful_files = len([r for r in st.session_state.processing_results if 'stats' in r])
