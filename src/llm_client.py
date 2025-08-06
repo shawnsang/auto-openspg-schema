@@ -346,8 +346,8 @@ class LLMClient:
 
 注意：
 1. 只提取在文档中明确提到的实体
-2. name字段：实体的中文名称，应该是标准化的专业术语，使用规范中文，不包含标点符号和空格
-3. english_name字段：实体的英文名称，必须是标准的英文单词组合，使用驼峰命名法（如：ConstructionTechnology、WaterproofSystem、TunnelConstruction）
+2. name字段：实体的中文名称，应该是标准化的专业术语，使用规范中文，不包含标点符号、空格等特殊字符
+3. english_name字段：实体的英文名称，必须以大写字母开头，只能包含字母和数字，总长度不超过50个字符（如：ConstructionTechnology、WaterproofSystem、TunnelConstruction）
 4. 描述应该简洁明了
 5. 如果文档中没有明确的实体，返回空数组 []
 6. 实体命名原则：提取核心概念，不要使用完整的文档标题或长句作为实体名称
@@ -356,13 +356,15 @@ class LLMClient:
 9. 避免："施工放线,"、"施工放线""、"施工放线,("等包含特殊字符的格式（错误）
 10. 避免："中国交建新疆乌尉公路包标准化实施手册 第五分册 隧道工程"等过长的完整标题作为实体名称（错误）
 11. 避免："Shi_Gong_Fang_Xian"、"ShiGongFangXian"等拼音形式的英文名称（错误）
-12. properties必须包含：每个实体都必须有properties，至少包含"description (描述)"和"name (名称)"
-13. relations推荐：积极识别和提取实体间的关系，包括但不限于：使用关系(usedIn/usedFor)、包含关系(contains/partOf)、连接关系(connectedTo)、依赖关系(dependsOn/requires)、位置关系(locatedIn/installedAt)、材料关系(madeOf/composedOf)、功能关系(serves/supports)等
-14. 关系命名：使用英文名称加中文说明的格式，如"requiresMonitoring (要求监测)"、"appliesTo (适用于)"、"contains (包含)"等
-15. 属性命名：properties中的键名使用英文加中文说明的格式，如"description (描述)"、"material (材料)"、"specification (规格)"等
-16. 属性值：properties中的值应该是属性的中文描述，不是数据类型
-17. 英文名称要求：必须是有意义的英文单词，不能是拼音，应该反映实体的实际含义
-18. 实体粒度：优先提取具体的技术概念、设备、材料、工艺等，而不是抽象的文档名称或组织结构
+12. 避免："3DModel"、"2DDrawing"等以数字开头的英文名称（错误），应使用"ThreeDimensionalModel"、"TwoDimensionalDrawing"（正确）
+13. 避免："施工 放线"、"混凝 土"等包含空格的中文名称（错误）
+14. properties必须包含：每个实体都必须有properties，至少包含"description (描述)"和"name (名称)"
+15. relations推荐：积极识别和提取实体间的关系，包括但不限于：使用关系(usedIn/usedFor)、包含关系(contains/partOf)、连接关系(connectedTo)、依赖关系(dependsOn/requires)、位置关系(locatedIn/installedAt)、材料关系(madeOf/composedOf)、功能关系(serves/supports)等
+16. 关系命名：使用英文名称加中文说明的格式，如"requiresMonitoring (要求监测)"、"appliesTo (适用于)"、"contains (包含)"等
+17. 属性命名：properties中的键名使用英文加中文说明的格式，如"description (描述)"、"material (材料)"、"specification (规格)"等
+18. 属性值：properties中的值应该是属性的中文描述，不是数据类型
+19. 英文名称要求：必须是有意义的英文单词，不能是拼音，应该反映实体的实际含义，不能以数字开头
+20. 实体粒度：优先提取具体的技术概念、设备、材料、工艺等，而不是抽象的文档名称或组织结构
 """
             }
         ]
@@ -389,6 +391,10 @@ class LLMClient:
                     # 获取英文名称
                     english_name = entity.get('english_name', '').strip()
                     
+                    # 验证命名规则
+                    if not self._validate_entity_naming(entity_name, english_name):
+                        continue
+                    
                     standardized_entity = {
                         'name': entity_name,
                         'english_name': english_name,
@@ -405,11 +411,44 @@ class LLMClient:
                     if standardized_entity['name']:
                         standardized_entities.append(standardized_entity)
             
-            return standardized_entities
+            # 去重处理：确保没有重名的实体
+            unique_entities = []
+            seen_names = set()
+            
+            for entity in standardized_entities:
+                entity_name = entity['name']
+                if entity_name not in seen_names:
+                    unique_entities.append(entity)
+                    seen_names.add(entity_name)
+                else:
+                    self.logger.warning(f"发现重复实体名称 '{entity_name}'，跳过重复项")
+            
+            return unique_entities
             
         except json.JSONDecodeError:
             # 如果 JSON 解析失败，尝试从文本中提取
             return self._extract_entities_from_text_fallback(response)
+    
+    def _validate_entity_naming(self, entity_name: str, english_name: str) -> bool:
+        """验证实体命名规则"""
+        # 检查中文名称是否包含空格
+        if ' ' in entity_name:
+            self.logger.warning(f"实体名称 '{entity_name}' 包含空格，跳过")
+            return False
+        
+        # 检查英文名称格式和长度
+        if english_name:
+            # 检查英文名称是否符合正则表达式 ^[A-Z][a-zA-Z0-9]*
+            if not re.match(r'^[A-Z][a-zA-Z0-9]*$', english_name):
+                self.logger.warning(f"英文名称 '{english_name}' 不符合格式要求（必须以大写字母开头，只能包含字母和数字），跳过")
+                return False
+            
+            # 检查英文名称长度是否超过50个字符
+            if len(english_name) > 50:
+                self.logger.warning(f"英文名称 '{english_name}' 长度超过50个字符，跳过")
+                return False
+        
+        return True
     
     def _clean_entity_name(self, name: str) -> str:
         """清理实体名称，移除特殊字符"""
