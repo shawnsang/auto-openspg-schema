@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "auto-openspg-schema"
+version = "0.1.0"
+description = "A Streamlit application for generating OpenSPG schema from documents"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+streamlit = "^1.48.0"
+openai = "^1.99.1"
+requests = "^2.32.4"
+loguru = "^0.7.2"
+langchain = "^0.3.27"
+pypdf2 = "^3.0.1"
+python-docx = "^1.2.0"
+chardet = "^5.2.0"
+
+
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+black = "^23.0.0"
+flake8 = "^6.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
