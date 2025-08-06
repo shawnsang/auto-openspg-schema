@@ -324,7 +324,7 @@ class LLMClient:
 - description: 实体描述
 - category: 实体类别（从上述类型中选择最合适的）
 - properties: 相关属性（必须包含，如果没有特殊属性，至少包含description和name）
-- relations: 与其他实体的关系（可选，如果文档中明确提到实体间关系则包含）
+- relations: 与其他实体的关系（推荐包含，积极识别实体间的各种关系）
 
 请以 JSON 格式返回结果：
 [
@@ -357,7 +357,7 @@ class LLMClient:
 10. 避免："中国交建新疆乌尉公路包标准化实施手册 第五分册 隧道工程"等过长的完整标题作为实体名称（错误）
 11. 避免："Shi_Gong_Fang_Xian"、"ShiGongFangXian"等拼音形式的英文名称（错误）
 12. properties必须包含：每个实体都必须有properties，至少包含"description (描述)"和"name (名称)"
-13. relations可选：只有当文档中明确提到实体间关系时才添加
+13. relations推荐：积极识别和提取实体间的关系，包括但不限于：使用关系(usedIn/usedFor)、包含关系(contains/partOf)、连接关系(connectedTo)、依赖关系(dependsOn/requires)、位置关系(locatedIn/installedAt)、材料关系(madeOf/composedOf)、功能关系(serves/supports)等
 14. 关系命名：使用英文名称加中文说明的格式，如"requiresMonitoring (要求监测)"、"appliesTo (适用于)"、"contains (包含)"等
 15. 属性命名：properties中的键名使用英文加中文说明的格式，如"description (描述)"、"material (材料)"、"specification (规格)"等
 16. 属性值：properties中的值应该是属性的中文描述，不是数据类型
@@ -413,8 +413,11 @@ class LLMClient:
         """清理实体名称，移除特殊字符"""
         import re
         
+        # 首先移除字符串开头和结尾的引号、逗号等
+        cleaned = name.strip().strip('"\',，。')
+        
         # 移除常见的特殊字符和标点符号
-        cleaned = re.sub(r'["\',，。！？；：()（）\[\]{}【】]', '', name)
+        cleaned = re.sub(r'["\',，。！？；：()（）\[\]{}【】]', '', cleaned)
         
         # 移除多余的空格
         cleaned = re.sub(r'\s+', '', cleaned)

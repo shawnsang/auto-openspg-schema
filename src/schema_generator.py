@@ -3,48 +3,7 @@ import re
 from .llm_client import LLMClient
 from .logger import logger
 
-# 简单的中文转拼音映射（常用字符）
-CHINESE_TO_PINYIN = {
-    '施': 'Shi', '工': 'Gong', '放': 'Fang', '线': 'Xian',
-    '建': 'Jian', '筑': 'Zhu', '设': 'She', '计': 'Ji',
-    '材': 'Cai', '料': 'Liao', '混': 'Hun', '凝': 'Ning',
-    '土': 'Tu', '钢': 'Gang', '筋': 'Jin', '水': 'Shui',
-    '泥': 'Ni', '砂': 'Sha', '石': 'Shi', '子': 'Zi',
-    '管': 'Guan', '道': 'Dao', '电': 'Dian', '气': 'Qi',
-    '暖': 'Nuan', '通': 'Tong', '风': 'Feng', '空': 'Kong',
-    '调': 'Tiao', '系': 'Xi', '统': 'Tong', '装': 'Zhuang',
-    '修': 'Xiu', '装': 'Zhuang', '饰': 'Shi', '门': 'Men',
-    '窗': 'Chuang', '墙': 'Qiang', '体': 'Ti', '屋': 'Wu',
-    '顶': 'Ding', '地': 'Di', '面': 'Mian', '基': 'Ji',
-    '础': 'Chu', '梁': 'Liang', '柱': 'Zhu', '板': 'Ban',
-    '楼': 'Lou', '层': 'Ceng', '房': 'Fang', '间': 'Jian',
-    '厅': 'Ting', '室': 'Shi', '厨': 'Chu', '卫': 'Wei',
-    '生': 'Sheng', '阳': 'Yang', '台': 'Tai', '走': 'Zou',
-    '廊': 'Lang', '楼': 'Lou', '梯': 'Ti', '电': 'Dian',
-    '梯': 'Ti', '消': 'Xiao', '防': 'Fang', '安': 'An',
-    '全': 'Quan', '监': 'Jian', '控': 'Kong', '照': 'Zhao',
-    '明': 'Ming', '灯': 'Deng', '具': 'Ju', '开': 'Kai',
-    '关': 'Guan', '插': 'Cha', '座': 'Zuo', '配': 'Pei',
-    '电': 'Dian', '箱': 'Xiang', '变': 'Bian', '压': 'Ya',
-    '器': 'Qi', '发': 'Fa', '电': 'Dian', '机': 'Ji',
-    '组': 'Zu', '锅': 'Guo', '炉': 'Lu', '热': 'Re',
-    '水': 'Shui', '器': 'Qi', '空': 'Kong', '压': 'Ya',
-    '机': 'Ji', '冷': 'Leng', '却': 'Que', '塔': 'Ta',
-    '泵': 'Beng', '阀': 'Fa', '门': 'Men', '法': 'Fa',
-    '兰': 'Lan', '接': 'Jie', '头': 'Tou', '弯': 'Wan',
-    '头': 'Tou', '三': 'San', '通': 'Tong', '四': 'Si',
-    '通': 'Tong', '异': 'Yi', '径': 'Jing', '管': 'Guan',
-    '件': 'Jian', '支': 'Zhi', '架': 'Jia', '吊': 'Diao',
-    '架': 'Jia', '托': 'Tuo', '架': 'Jia', '固': 'Gu',
-    '定': 'Ding', '夹': 'Jia', '保': 'Bao', '温': 'Wen',
-    '隔': 'Ge', '热': 'Re', '防': 'Fang', '火': 'Huo',
-    '涂': 'Tu', '料': 'Liao', '密': 'Mi', '封': 'Feng',
-    '胶': 'Jiao', '玻': 'Bo', '璃': 'Li', '胶': 'Jiao',
-    '结': 'Jie', '构': 'Gou', '胶': 'Jiao', '螺': 'Luo',
-    '栓': 'Shuan', '螺': 'Luo', '母': 'Mu', '垫': 'Dian',
-    '片': 'Pian', '弹': 'Dan', '簧': 'Huang', '垫': 'Dian',
-    '圈': 'Quan', '密': 'Mi', '封': 'Feng', '圈': 'Quan'
-}
+
 
 class SchemaGenerator:
     """Schema 生成器，用于从文档块中提取实体并生成 OpenSPG 格式的 Schema"""
@@ -113,13 +72,15 @@ class SchemaGenerator:
         standardized_entities = []
         
         for i, entity in enumerate(raw_entities):
-            logger.debug(f"标准化实体 {i+1}/{len(raw_entities)}: {entity.get('name', 'Unknown')}")
+            # 清理实体名称用于日志显示
+            display_name = self._clean_name_for_display(entity.get('name', 'Unknown'))
+            logger.debug(f"标准化实体 {i+1}/{len(raw_entities)}: {display_name}")
             standardized_entity = self._standardize_entity(entity)
             if standardized_entity:
                 standardized_entities.append(standardized_entity)
-                logger.debug(f"实体 {entity.get('name', 'Unknown')} 标准化成功")
+                logger.debug(f"实体 {display_name} 标准化成功")
             else:
-                logger.warning(f"实体 {entity.get('name', 'Unknown')} 标准化失败，已跳过")
+                logger.warning(f"实体 {display_name} 标准化失败，已跳过")
         
         logger.success(f"文档块实体提取完成，成功标准化 {len(standardized_entities)}/{len(raw_entities)} 个实体")
         
@@ -129,7 +90,31 @@ class SchemaGenerator:
             logger.info(f"标准化后的实体: {', '.join(entity_names)}")
         
         return standardized_entities
-    
+
+    def _clean_name_for_display(self, name: str) -> str:
+        """清理实体名称用于日志显示"""
+        import re
+        
+        # 首先移除字符串开头和结尾的引号、逗号等
+        cleaned = name.strip().strip('"\',，。')
+        
+        # 移除常见的特殊字符和标点符号
+        cleaned = re.sub(r'["\',，。！？；：()（）\[\]{}【】]', '', cleaned)
+        
+        # 移除多余的空格
+        cleaned = re.sub(r'\s+', '', cleaned)
+        
+        # 如果清理后为空，返回原始名称的简化版本
+        if not cleaned.strip():
+            # 尝试提取中文字符
+            chinese_chars = re.findall(r'[\u4e00-\u9fff]', name)
+            if chinese_chars:
+                cleaned = ''.join(chinese_chars)
+            else:
+                cleaned = 'Unknown'
+        
+        return cleaned.strip()
+
     def suggest_entity_deletions(self, existing_entities: List[Dict], document_chunks: List[Dict]) -> List[Dict[str, str]]:
         """建议删除的实体"""
         logger.info(f"开始分析实体删除建议，现有实体: {len(existing_entities)} 个，文档块: {len(document_chunks)} 个")
@@ -169,14 +154,15 @@ class SchemaGenerator:
         description = entity.get('description', '').strip()
         category = entity.get('category', '其他')
         
-        # 获取英文名称（优先使用LLM提供的，否则自动转换）
-        llm_english_name = entity.get('english_name', '').strip()
-        if llm_english_name and self._is_valid_english_name(llm_english_name):
-            english_name = llm_english_name
-        else:
-            # 回退到自动转换
-            english_name = self._convert_chinese_to_english_name(original_name)
-            logger.warning(f"实体 '{original_name}' 的LLM英文名称无效或缺失，使用自动转换: {english_name}")
+        # 获取英文名称（使用LLM提供的）
+        english_name = entity.get('english_name', '').strip()
+        if not english_name:
+            logger.warning(f"实体 '{original_name}' 缺少英文名称，跳过")
+            return None
+
+        logger.debug(f"实体名称: {original_name}")
+        logger.debug(f"英文名称: {english_name}")
+
         
         # 确定实体类型
         entity_type = self._map_category_to_type(category)
@@ -194,6 +180,7 @@ class SchemaGenerator:
             'relations': relations
         }
         
+        logger.debug(f"标准化后的实体: {standardized}")
         return standardized
     
     def _map_category_to_type(self, category: str) -> str:
@@ -280,55 +267,9 @@ class SchemaGenerator:
         
         return standardized or 'customProperty'
     
-    def _is_valid_english_name(self, name: str) -> bool:
-        """验证英文名称是否有效"""
-        if not name:
-            return False
-        
-        # 检查是否只包含英文字母、数字和下划线
-        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', name):
-            return False
-        
-        # 检查是否包含拼音模式（连续的大写字母，可能是拼音）
-        # 如果包含类似 "ShiGong" 这样的拼音模式，认为无效
-        pinyin_pattern = r'[A-Z][a-z]*[A-Z][a-z]*[A-Z][a-z]*'
-        if re.search(pinyin_pattern, name) and len(name) > 10:
-            # 进一步检查是否包含已知的拼音组合
-            pinyin_words = ['Shi', 'Gong', 'Dao', 'Shui', 'Fang', 'Jian', 'Guan', 'Dian']
-            pinyin_count = sum(1 for pinyin in pinyin_words if pinyin in name)
-            if pinyin_count >= 2:  # 如果包含2个或更多拼音词，认为是拼音组合
-                return False
-        
-        return True
+
     
-    def _convert_chinese_to_english_name(self, chinese_name: str) -> str:
-        """将中文名称转换为英文名称"""
-        # 清理输入，移除特殊字符和多余的引号、逗号
-        cleaned_name = re.sub(r'["\',，。！？；：]', '', chinese_name.strip())
-        
-        # 如果已经是英文，直接返回（首字母大写）
-        if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', cleaned_name):
-            return cleaned_name.capitalize()
-        
-        # 转换中文字符为拼音
-        english_parts = []
-        for char in cleaned_name:
-            if char in CHINESE_TO_PINYIN:
-                english_parts.append(CHINESE_TO_PINYIN[char])
-            elif char.isalpha():  # 保留英文字符
-                english_parts.append(char.upper())
-            elif char.isdigit():  # 保留数字
-                english_parts.append(char)
-            # 忽略其他字符
-        
-        # 组合结果
-        if english_parts:
-            result = ''.join(english_parts)
-            # 确保首字母大写
-            return result[0].upper() + result[1:] if result else 'Entity'
-        else:
-            # 如果无法转换，使用通用名称
-            return 'Entity'
+
     
     def _build_entity_relations(self, entity: Dict[str, Any]) -> Dict[str, Any]:
         """构建实体关系"""
