@@ -20,26 +20,43 @@ class SchemaManager:
             'modifications': []
         }
     
-    def add_or_update_entity(self, entity_name: str, description: str, properties: Dict[str, Any] = None) -> Dict[str, str]:
+    def add_or_update_entity(self, entity_name: str, description: str, properties: Dict[str, Any] = None, chinese_name: str = None, relations: Dict[str, Any] = None) -> Dict[str, str]:
         """添加或更新实体"""
         
         properties = properties or {}
+        relations = relations or {}
         
         # 检查实体是否已存在
         if entity_name in self.entities:
             # 更新现有实体
             old_entity = self.entities[entity_name].copy()
             
-            # 合并属性
-            merged_properties = old_entity.get('properties', {}).copy()
-            merged_properties.update(properties)
+            # 合并属性 - 如果传入的properties已经是完整的属性定义，直接使用；否则合并
+            if properties and any(isinstance(v, dict) and 'name' in v for v in properties.values()):
+                # 传入的是完整的属性定义，直接使用
+                merged_properties = properties
+            else:
+                # 传入的是简单属性，需要合并和标准化
+                merged_properties = old_entity.get('properties', {}).copy()
+                merged_properties.update(self._build_standard_properties(properties))
+            
+            # 合并关系
+            merged_relations = old_entity.get('relations', {}).copy()
+            merged_relations.update(relations)
             
             # 更新实体
-            self.entities[entity_name].update({
+            update_data = {
                 'description': description,
                 'properties': merged_properties,
+                'relations': merged_relations,
                 'last_modified': datetime.now().isoformat()
-            })
+            }
+            
+            # 如果提供了中文名称，则更新
+            if chinese_name:
+                update_data['chinese_name'] = chinese_name
+                
+            self.entities[entity_name].update(update_data)
             
             # 记录修改
             self._record_modification('updated', entity_name, old_entity, self.entities[entity_name])
@@ -48,12 +65,21 @@ class SchemaManager:
         
         else:
             # 创建新实体
+            # 处理属性 - 如果传入的properties已经是完整的属性定义，直接使用；否则标准化
+            if properties and any(isinstance(v, dict) and 'name' in v for v in properties.values()):
+                # 传入的是完整的属性定义，直接使用
+                final_properties = properties
+            else:
+                # 传入的是简单属性，需要标准化
+                final_properties = self._build_standard_properties(properties)
+            
             new_entity = {
                 'name': entity_name,
-                'chinese_name': entity_name,
+                'chinese_name': chinese_name or entity_name,
                 'description': description,
                 'type': self._determine_entity_type(entity_name, description),
-                'properties': self._build_standard_properties(properties),
+                'properties': final_properties,
+                'relations': relations,
                 'created': datetime.now().isoformat(),
                 'last_modified': datetime.now().isoformat()
             }
@@ -306,39 +332,60 @@ class SchemaManager:
     def _build_standard_properties(self, custom_properties: Dict[str, Any] = None) -> Dict[str, Any]:
         """构建标准属性"""
         
-        properties = {
-            'description': {
+        properties = {}
+        
+        # 检查自定义属性中是否已经包含标准属性
+        has_description = False
+        has_name = False
+        has_semantic_type = False
+        
+        if custom_properties:
+            for prop_name in custom_properties.keys():
+                prop_lower = prop_name.lower().replace(' ', '').replace('(', '').replace(')', '')
+                if 'description' in prop_lower or '描述' in prop_name:
+                    has_description = True
+                elif 'name' in prop_lower or '名称' in prop_name:
+                    has_name = True
+                elif 'semantictype' in prop_lower or '语义类型' in prop_name:
+                    has_semantic_type = True
+        
+        # 只添加不存在的标准属性
+        if not has_description:
+            properties['description'] = {
                 'name': 'description(描述)',
                 'type': 'Text'
-            },
-            'name': {
+            }
+        
+        if not has_name:
+            properties['name'] = {
                 'name': 'name(名称)',
                 'type': 'Text'
-            },
-            'semanticType': {
+            }
+        
+        # 只有在没有任何自定义属性时才添加semanticType
+        if not has_semantic_type and not custom_properties:
+            properties['semanticType'] = {
                 'name': 'semanticType(语义类型)',
                 'type': 'Text',
                 'index': 'Text'
             }
-        }
         
         # 添加自定义属性
         if custom_properties:
             for prop_name, prop_value in custom_properties.items():
-                if prop_name not in properties:
-                    # 检查属性名是否已经包含中文说明
-                    if '(' in prop_name and ')' in prop_name:
-                        # 已经是正确格式（如："material (材料)"），直接使用
-                        properties[prop_name] = {
-                            'name': prop_name,
-                            'type': 'Text'
-                        }
-                    else:
-                        # 旧格式，添加中文说明
-                        properties[prop_name] = {
-                            'name': f"{prop_name}({prop_name})",
-                            'type': 'Text'
-                        }
+                # 检查属性名是否已经包含中文说明
+                if '(' in prop_name and ')' in prop_name:
+                    # 已经是正确格式（如："description (描述)"），直接使用
+                    properties[prop_name] = {
+                        'name': prop_name,
+                        'type': 'Text'
+                    }
+                else:
+                    # 旧格式，添加中文说明
+                    properties[prop_name] = {
+                        'name': f"{prop_name}({prop_name})",
+                        'type': 'Text'
+                    }
         
         return properties
     

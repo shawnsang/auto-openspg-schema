@@ -380,7 +380,8 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 for entity in entities:
                     logger.debug(f"处理实体: {entity['name']}")
                     result = st.session_state.schema_manager.add_or_update_entity(
-                        entity['name'], entity['description'], entity.get('properties', {})
+                        entity['name'], entity['description'], entity.get('properties', {}), 
+                        entity.get('chinese_name'), entity.get('relations', {})
                     )
                     
                     if result['action'] == 'created':
