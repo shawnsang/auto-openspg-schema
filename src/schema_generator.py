@@ -290,14 +290,14 @@ class SchemaGenerator:
                 relation_name = self._standardize_relation_name(english_part)
                 relations[relation_name] = {
                     'name': relation_key,  # 保持原有格式
-                    'target': self._convert_chinese_to_english_name(relation_value)
+                    'target': relation_value  # 直接使用关系目标值
                 }
             else:
                 # 旧格式，需要转换
                 relation_name = self._standardize_relation_name(relation_key)
                 relations[relation_name] = {
                     'name': f"{relation_name}({relation_key})",
-                    'target': self._convert_chinese_to_english_name(relation_value)
+                    'target': relation_value  # 直接使用关系目标值
                 }
         
         return relations
@@ -307,12 +307,13 @@ class SchemaGenerator:
         # 移除特殊字符
         cleaned = re.sub(r'[^\w\u4e00-\u9fff]', '', relation_name)
         
-        # 转换为英文
-        english_name = self._convert_chinese_to_english_name(cleaned)
-        
-        # 关系名称通常是动词，首字母小写
-        if english_name:
-            return english_name[0].lower() + english_name[1:] if len(english_name) > 1 else english_name.lower()
+        # 直接使用清理后的关系名称，如果是英文则首字母小写
+        if cleaned:
+            # 如果是英文，首字母小写
+            if re.match(r'^[a-zA-Z]', cleaned):
+                return cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+            # 如果是中文或其他，直接返回
+            return cleaned
         
         return 'relatesTo'
     

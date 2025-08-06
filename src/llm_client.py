@@ -373,22 +373,24 @@ class LLMClient:
             # 尝试直接解析 JSON
             entities = json.loads(response)
             
-            if not isinstance(entities, list):
+            # 如果是单个实体对象，转换为列表
+            if isinstance(entities, dict):
+                entities = [entities]
+            elif not isinstance(entities, list):
                 return []
             
             # 验证和标准化实体格式
             standardized_entities = []
             for entity in entities:
                 if isinstance(entity, dict) and 'name' in entity:
-                    # 清理实体名称，移除特殊字符
-                    raw_name = entity.get('name', '').strip()
-                    cleaned_name = self._clean_entity_name(raw_name)
+                    # 直接使用原始名称，不进行清理（LLM提示词已约束格式）
+                    entity_name = entity.get('name', '').strip()
                     
                     # 获取英文名称
                     english_name = entity.get('english_name', '').strip()
                     
                     standardized_entity = {
-                        'name': cleaned_name,
+                        'name': entity_name,
                         'english_name': english_name,
                         'description': entity.get('description', '').strip(),
                         'category': entity.get('category', 'Others').strip(),
@@ -413,51 +415,110 @@ class LLMClient:
         """清理实体名称，移除特殊字符"""
         import re
         
-        # 首先移除字符串开头和结尾的引号、逗号等
-        cleaned = name.strip().strip('"\',，。')
+        if not name:
+            return ''
         
-        # 移除常见的特殊字符和标点符号
-        cleaned = re.sub(r'["\',，。！？；：()（）\[\]{}【】]', '', cleaned)
+        # 多次清理，确保彻底移除特殊字符
+        cleaned = name.strip()
         
-        # 移除多余的空格
+        # 移除开头和结尾的引号、逗号、句号等（多次清理确保彻底）
+        for _ in range(3):  # 多次清理确保彻底
+            cleaned = cleaned.strip('"\',，。；：！？()（）[]【】{}')
+            cleaned = re.sub(r'^["\',，。；：！？()（）\[\]【】{}]+', '', cleaned)
+            cleaned = re.sub(r'["\',，。；：！？()（）\[\]【】{}]+$', '', cleaned)
+            if not re.search(r'["\',，。；：！？()（）\[\]【】{}]', cleaned):
+                break  # 如果没有特殊字符了，跳出循环
+        
+        # 移除中间的特殊标点符号（保留中文字符、英文字符、数字、下划线、连字符）
+        cleaned = re.sub(r'[^\w\u4e00-\u9fff\-]', '', cleaned)
+        
+        # 移除多余的空格和连字符
         cleaned = re.sub(r'\s+', '', cleaned)
+        cleaned = re.sub(r'-+', '-', cleaned).strip('-')
         
-        # 如果清理后为空，返回原始名称的简化版本
-        if not cleaned.strip():
-            # 尝试提取中文字符
+        # 如果清理后为空，尝试提取有效字符
+        if not cleaned:
+            # 提取中文字符
             chinese_chars = re.findall(r'[\u4e00-\u9fff]', name)
             if chinese_chars:
                 cleaned = ''.join(chinese_chars)
             else:
-                cleaned = 'Entity'
+                # 提取英文字符和数字
+                english_chars = re.findall(r'[a-zA-Z0-9]', name)
+                if english_chars:
+                    cleaned = ''.join(english_chars)
+                else:
+                    cleaned = 'Entity'
         
         return cleaned.strip()
     
     def _extract_entities_from_text_fallback(self, text: str) -> List[Dict[str, Any]]:
         """从文本中提取实体的备用方法"""
+        import re
         entities = []
         
-        # 简单的文本解析逻辑
-        lines = text.split('\n')
-        current_entity = {}
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
+        # 尝试修复JSON格式
+        try:
+            # 移除开头的非JSON字符
+            text = text.strip()
+            if text.startswith('},'):
+                text = text[2:].strip()
+            if text.startswith('{'):
+                text = '[' + text + ']'
+            elif not text.startswith('['):
+                # 查找第一个{开始的位置
+                start_pos = text.find('{')
+                if start_pos != -1:
+                    text = '[' + text[start_pos:] + ']'
             
-            if line.startswith('name:') or line.startswith('"name"'):
-                if current_entity and current_entity.get('name'):
-                    entities.append(current_entity)
-                current_entity = {'name': line.split(':', 1)[1].strip().strip('"')}
-            elif line.startswith('description:') or line.startswith('"description"'):
-                current_entity['description'] = line.split(':', 1)[1].strip().strip('"')
-            elif line.startswith('category:') or line.startswith('"category"'):
-                current_entity['category'] = line.split(':', 1)[1].strip().strip('"')
+            # 尝试解析修复后的JSON
+            entities = json.loads(text)
+            if isinstance(entities, list):
+                # 标准化实体格式
+                standardized_entities = []
+                for entity in entities:
+                    if isinstance(entity, dict) and 'name' in entity:
+                        entity_name = entity.get('name', '').strip()
+                        english_name = entity.get('english_name', '').strip()
+                        
+                        standardized_entity = {
+                            'name': entity_name,
+                            'english_name': english_name,
+                            'description': entity.get('description', '').strip(),
+                            'category': entity.get('category', 'Others').strip(),
+                            'properties': entity.get('properties', {})
+                        }
+                        
+                        if 'relations' in entity:
+                            standardized_entity['relations'] = entity['relations']
+                        
+                        if standardized_entity['name']:
+                            standardized_entities.append(standardized_entity)
+                
+                return standardized_entities
+        except:
+            pass
         
-        # 添加最后一个实体
-        if current_entity and current_entity.get('name'):
-            entities.append(current_entity)
+        # 如果JSON修复失败，使用正则表达式提取
+        name_pattern = r'"name"\s*:\s*"([^"]+)"'
+        english_name_pattern = r'"english_name"\s*:\s*"([^"]+)"'
+        description_pattern = r'"description"\s*:\s*"([^"]+)"'
+        
+        names = re.findall(name_pattern, text)
+        english_names = re.findall(english_name_pattern, text)
+        descriptions = re.findall(description_pattern, text)
+        
+        # 组合提取的信息
+        for i, name in enumerate(names):
+            entity = {
+                'name': name.strip(),
+                'english_name': english_names[i] if i < len(english_names) else '',
+                'description': descriptions[i] if i < len(descriptions) else '',
+                'category': 'Others',
+                'properties': {}
+            }
+            if entity['name']:
+                entities.append(entity)
         
         return entities
     
