@@ -1,5 +1,6 @@
 from typing import Dict, List, Any, Optional
 import json
+import yaml
 from datetime import datetime
 
 class SchemaManager:
@@ -296,6 +297,118 @@ class SchemaManager:
             
         except Exception as e:
             print(f"导入失败: {str(e)}")
+            return False
+    
+    def export_to_yaml(self) -> str:
+        """导出为 YAML 格式，使用 tab 缩进"""
+        
+        export_data = {
+            'namespace': self.namespace,
+            'entities': self.entities,
+            'statistics': self.get_statistics(),
+            'export_time': datetime.now().isoformat()
+        }
+        
+        # 使用 tab 缩进的 YAML 输出
+        yaml_str = yaml.dump(
+            export_data, 
+            default_flow_style=False, 
+            allow_unicode=True,
+            indent=1,  # 基础缩进
+            width=float('inf')  # 避免自动换行
+        )
+        
+        # 将空格缩进替换为 tab 缩进
+        lines = yaml_str.split('\n')
+        tab_lines = []
+        for line in lines:
+            if line.strip():  # 非空行
+                # 计算前导空格数
+                leading_spaces = len(line) - len(line.lstrip())
+                # 将空格转换为 tab（每个缩进级别用一个 tab）
+                tab_count = leading_spaces // 2  # YAML 默认 2 空格为一个缩进级别
+                tab_lines.append('\t' * tab_count + line.lstrip())
+            else:
+                tab_lines.append(line)
+        
+        return '\n'.join(tab_lines)
+    
+    def import_from_yaml(self, yaml_data: str) -> bool:
+        """从 YAML 数据导入"""
+        
+        try:
+            # 将 tab 缩进转换为空格缩进以便 YAML 解析
+            lines = yaml_data.split('\n')
+            space_lines = []
+            for line in lines:
+                if line.strip():  # 非空行
+                    # 计算前导 tab 数
+                    leading_tabs = len(line) - len(line.lstrip('\t'))
+                    # 将 tab 转换为空格（每个 tab 转换为 2 个空格）
+                    space_lines.append('  ' * leading_tabs + line.lstrip('\t'))
+                else:
+                    space_lines.append(line)
+            
+            space_yaml = '\n'.join(space_lines)
+            data = yaml.safe_load(space_yaml)
+            
+            if 'entities' in data:
+                self.entities = data['entities']
+            
+            if 'namespace' in data:
+                self.namespace = data['namespace']
+            
+            self.last_modified = datetime.now()
+            
+            return True
+            
+        except Exception as e:
+            print(f"YAML 导入失败: {str(e)}")
+            return False
+    
+    def save_to_file(self, file_path: str, format_type: str = 'yaml') -> bool:
+        """保存 Schema 到文件"""
+        
+        try:
+            if format_type.lower() == 'yaml':
+                content = self.export_to_yaml()
+            elif format_type.lower() == 'json':
+                content = self.export_to_json()
+            else:
+                raise ValueError(f"不支持的格式: {format_type}")
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            return True
+            
+        except Exception as e:
+            print(f"保存文件失败: {str(e)}")
+            return False
+    
+    def load_from_file(self, file_path: str) -> bool:
+        """从文件加载 Schema"""
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 根据文件扩展名判断格式
+            if file_path.lower().endswith('.yaml') or file_path.lower().endswith('.yml'):
+                return self.import_from_yaml(content)
+            elif file_path.lower().endswith('.json'):
+                return self.import_from_json(content)
+            else:
+                # 尝试自动检测格式
+                try:
+                    # 先尝试 YAML
+                    return self.import_from_yaml(content)
+                except:
+                    # 再尝试 JSON
+                    return self.import_from_json(content)
+            
+        except Exception as e:
+            print(f"加载文件失败: {str(e)}")
             return False
     
     def clear_all(self):

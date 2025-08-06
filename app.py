@@ -28,6 +28,14 @@ def main():
         # LLM 配置
         st.subheader("LLM 设置")
         
+        # 专业领域设置
+        domain_expertise = st.text_input(
+            "专业领域",
+            value="",
+            placeholder="例如：隧道防排水工程、建筑结构设计、机械制造等",
+            help="指定专业领域以提高Schema的专业识别能力，留空则使用通用设置"
+        )
+        
         # LLM 提供商选择
         provider = st.selectbox(
             "LLM 提供商",
@@ -68,22 +76,113 @@ def main():
         # Schema 配置
         st.subheader("Schema 设置")
         namespace = st.text_input("命名空间", value="Engineering")
+        
+        # Schema 文件管理
+        st.subheader("Schema 文件管理")
+        
+        # 保存 Schema
+        col_save1, col_save2 = st.columns([2, 1])
+        with col_save1:
+            save_filename = st.text_input(
+                "保存文件名", 
+                value=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml",
+                help="支持 .yaml 和 .json 格式"
+            )
+        with col_save2:
+            if st.button("💾 保存 Schema", help="保存当前 Schema 到文件"):
+                if 'schema_manager' in st.session_state and save_filename:
+                    try:
+                        # 确定保存格式
+                        if save_filename.lower().endswith('.yaml') or save_filename.lower().endswith('.yml'):
+                            format_type = 'yaml'
+                        elif save_filename.lower().endswith('.json'):
+                            format_type = 'json'
+                        else:
+                            # 默认使用 YAML 格式
+                            save_filename += '.yaml'
+                            format_type = 'yaml'
+                        
+                        if st.session_state.schema_manager.save_to_file(save_filename, format_type):
+                            st.success(f"✅ Schema 已保存到 {save_filename}")
+                        else:
+                            st.error("❌ 保存失败")
+                    except Exception as e:
+                        st.error(f"❌ 保存失败: {str(e)}")
+                else:
+                    st.warning("⚠️ 请输入文件名")
+        
+        # 加载 Schema
+        uploaded_schema = st.file_uploader(
+            "📂 加载已保存的 Schema",
+            type=["yaml", "yml", "json"],
+            help="上传之前保存的 Schema 文件以继续完善"
+        )
+        
+        if uploaded_schema is not None:
+            try:
+                # 读取文件内容
+                content = uploaded_schema.read().decode('utf-8')
+                
+                # 创建新的 SchemaManager 实例并加载数据
+                temp_manager = SchemaManager(namespace)
+                
+                # 根据文件扩展名选择导入方法
+                if uploaded_schema.name.lower().endswith('.yaml') or uploaded_schema.name.lower().endswith('.yml'):
+                    success = temp_manager.import_from_yaml(content)
+                elif uploaded_schema.name.lower().endswith('.json'):
+                    success = temp_manager.import_from_json(content)
+                else:
+                    # 尝试自动检测
+                    success = temp_manager.import_from_yaml(content)
+                    if not success:
+                        success = temp_manager.import_from_json(content)
+                
+                if success:
+                    st.session_state.schema_manager = temp_manager
+                    st.success(f"✅ 成功加载 Schema: {uploaded_schema.name}")
+                    st.rerun()
+                else:
+                    st.error("❌ Schema 文件格式错误或损坏")
+                    
+            except Exception as e:
+                st.error(f"❌ 加载失败: {str(e)}")
+        
+        # 显示当前 Schema 信息
+        if 'schema_manager' in st.session_state:
+            stats = st.session_state.schema_manager.get_statistics()
+            if stats['entity_count'] > 0:
+                st.info(f"📊 当前 Schema: {stats['entity_count']} 个实体类型")
     
     # 主界面
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.header("📄 文档上传")
+        
+        # 分批处理提示
+        st.info(
+            "💡 **分批处理模式**: 您可以分多次上传文档，每次处理后 Schema 会自动累积更新。"
+            "支持保存和加载 Schema 文件，便于长期项目的逐步完善。"
+        )
+        
         uploaded_files = st.file_uploader(
             "选择文档文件",
             type=["pdf", "docx", "txt"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="支持批量上传，可分多次处理不同的文档集合"
         )
         
         if uploaded_files:
             st.success(f"已上传 {len(uploaded_files)} 个文件")
             for file in uploaded_files:
                 st.write(f"- {file.name} ({file.size} bytes)")
+            
+            # 显示处理建议
+            if len(uploaded_files) > 5:
+                st.warning(
+                    f"⚠️ 当前上传了 {len(uploaded_files)} 个文件，建议分批处理以获得更好的性能。"
+                    "您可以先处理部分文件，保存 Schema 后再继续处理其余文件。"
+                )
     
     with col2:
         st.header("🎯 当前 Schema")
@@ -119,7 +218,7 @@ def main():
         else:
             process_documents(
                 uploaded_files, provider.lower(), api_key, model_name, base_url,
-                chunk_size, chunk_overlap, namespace
+                chunk_size, chunk_overlap, namespace, domain_expertise
             )
     
     # 显示处理结果
@@ -160,12 +259,33 @@ def main():
             st.code(schema_content)
             st.success("Schema 已显示，请手动复制")
         
+        # 下载格式选择
+        download_format = st.selectbox(
+            "下载格式",
+            ["OpenSPG Schema", "YAML", "JSON"],
+            help="选择下载的文件格式"
+        )
+        
+        # 根据选择的格式准备下载内容
+        if download_format == "OpenSPG Schema":
+            download_content = schema_content
+            file_extension = "txt"
+            mime_type = "text/plain"
+        elif download_format == "YAML":
+            download_content = st.session_state.schema_manager.export_to_yaml()
+            file_extension = "yaml"
+            mime_type = "text/yaml"
+        else:  # JSON
+            download_content = st.session_state.schema_manager.export_to_json()
+            file_extension = "json"
+            mime_type = "application/json"
+        
         # 下载按钮
         st.download_button(
-            label="💾 下载 Schema",
-            data=schema_content,
-            file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain"
+            label=f"💾 下载 {download_format}",
+            data=download_content,
+            file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
+            mime=mime_type
         )
         
         # 清空按钮
@@ -173,8 +293,22 @@ def main():
             st.session_state.schema_manager = SchemaManager(namespace)
             st.session_state.processing_results = []
             st.rerun()
+        
+        # 显示统计信息
+        if st.session_state.schema_manager.entities:
+            stats = st.session_state.schema_manager.get_statistics()
+            st.markdown("---")
+            st.subheader("📊 统计信息")
+            st.metric("实体数量", stats['entity_count'])
+            st.metric("属性数量", stats['property_count'])
+            
+            # 显示实体类型分布
+            if stats['entity_types']:
+                st.write("**实体类型分布:**")
+                for entity_type, count in stats['entity_types'].items():
+                    st.write(f"- {entity_type}: {count}")
 
-def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace):
+def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise=""):
     """处理上传的文档"""
     logger.info(f"开始处理文档批次，共 {len(uploaded_files)} 个文件")
     logger.info(f"配置参数 - 提供商: {provider}, 模型: {model_name}, 分块大小: {chunk_size}, 重叠: {chunk_overlap}")
@@ -186,7 +320,8 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             provider=provider,
             api_key=api_key,
             model_name=model_name,
-            base_url=base_url if base_url else None
+            base_url=base_url if base_url else None,
+            domain_expertise=domain_expertise
         )
         
         # 测试连接
