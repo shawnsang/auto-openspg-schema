@@ -20,8 +20,8 @@ class SchemaManager:
             'modifications': []
         }
     
-    def add_or_update_entity(self, entity_name: str, description: str, properties: Dict[str, Any] = None, chinese_name: str = None, relations: Dict[str, Any] = None) -> Dict[str, str]:
-        """添加或更新实体"""
+    def add_or_update_entity(self, entity_name: str, description: str, properties: Dict[str, Any] = None, chinese_name: str = None, relations: Dict[str, Any] = None, openspg_type: str = None, entity_type: str = None) -> Dict[str, str]:
+        """添加或更新实体（支持OpenSPG标准）"""
         
         properties = properties or {}
         relations = relations or {}
@@ -55,6 +55,14 @@ class SchemaManager:
             # 如果提供了中文名称，则更新
             if chinese_name:
                 update_data['chinese_name'] = chinese_name
+            
+            # 如果提供了OpenSPG类型，则更新
+            if openspg_type:
+                update_data['openspg_type'] = openspg_type
+            
+            # 如果提供了实体类型，则更新
+            if entity_type:
+                update_data['type'] = entity_type
                 
             self.entities[entity_name].update(update_data)
             
@@ -77,7 +85,8 @@ class SchemaManager:
                 'name': entity_name,
                 'chinese_name': chinese_name or entity_name,
                 'description': description,
-                'type': self._determine_entity_type(entity_name, description),
+                'type': entity_type or self._determine_entity_type(entity_name, description),
+                'openspg_type': openspg_type or 'EntityType',  # OpenSPG标准类型
                 'properties': final_properties,
                 'relations': relations,
                 'created': datetime.now().isoformat(),
@@ -158,21 +167,22 @@ class SchemaManager:
         return '\n'.join(lines).strip()
     
     def _generate_entity_schema_string(self, entity: Dict[str, Any]) -> str:
-        """生成单个实体的 Schema 字符串"""
+        """生成单个实体的 Schema 字符串（符合OpenSPG标准）"""
         
         lines = []
         
-        # 实体定义行
-        entity_line = f"{entity['name']}({entity['chinese_name']}): EntityType"
+        # 实体定义行（使用OpenSPG标准类型）
+        openspg_type = entity.get('openspg_type', 'EntityType')
+        entity_line = f"{entity['name']}({entity['chinese_name']}): {openspg_type}"
         lines.append(entity_line)
         
-        # 属性部分
+        # 属性部分（符合OpenSPG标准）
         properties = entity.get('properties', {})
         if properties:
             lines.append("\tproperties:")
             
-            # 按标准顺序排列属性
-            standard_order = ['description', 'name', 'semanticType']
+            # 按OpenSPG标准顺序排列属性：desc, name, 然后是其他属性
+            standard_order = ['desc', 'name']
             
             # 先添加标准属性
             for prop_key in standard_order:
@@ -181,7 +191,12 @@ class SchemaManager:
                     prop_line = f"\t\t{prop_def['name']}: {prop_def['type']}"
                     lines.append(prop_line)
                     
-                    # 添加索引信息
+                    # 添加约束条件（OpenSPG标准）
+                    if 'constraint' in prop_def and prop_def['constraint']:
+                        constraint_line = f"\t\t\tconstraint: {prop_def['constraint']}"
+                        lines.append(constraint_line)
+                    
+                    # 添加索引信息（向后兼容）
                     if 'index' in prop_def:
                         index_line = f"\t\t\tindex: {prop_def['index']}"
                         lines.append(index_line)
@@ -192,11 +207,17 @@ class SchemaManager:
                     prop_line = f"\t\t{prop_def['name']}: {prop_def['type']}"
                     lines.append(prop_line)
                     
+                    # 添加约束条件（OpenSPG标准）
+                    if 'constraint' in prop_def and prop_def['constraint']:
+                        constraint_line = f"\t\t\tconstraint: {prop_def['constraint']}"
+                        lines.append(constraint_line)
+                    
+                    # 添加索引信息（向后兼容）
                     if 'index' in prop_def:
                         index_line = f"\t\t\tindex: {prop_def['index']}"
                         lines.append(index_line)
         
-        # 关系部分
+        # 关系部分（符合OpenSPG标准）
         relations = entity.get('relations', {})
         if relations:
             lines.append("\trelations:")
@@ -205,6 +226,11 @@ class SchemaManager:
                 if isinstance(relation_def, dict) and 'name' in relation_def and 'target' in relation_def:
                     relation_line = f"\t\t{relation_def['name']}: {relation_def['target']}"
                     lines.append(relation_line)
+                    
+                    # 添加关系约束条件（OpenSPG标准）
+                    if 'constraint' in relation_def and relation_def['constraint']:
+                        constraint_line = f"\t\t\tconstraint: {relation_def['constraint']}"
+                        lines.append(constraint_line)
                 else:
                     # 兼容旧格式
                     relation_line = f"\t\t{relation_key}: {relation_def}"
@@ -330,57 +356,70 @@ class SchemaManager:
         return self.entities.get(english_name)
     
     def _build_standard_properties(self, custom_properties: Dict[str, Any] = None) -> Dict[str, Any]:
-        """构建标准属性"""
+        """构建标准属性（符合OpenSPG标准）"""
         
         properties = {}
         
         # 检查自定义属性中是否已经包含标准属性
-        has_description = False
+        has_desc = False
         has_name = False
-        has_semantic_type = False
         
         if custom_properties:
             for prop_name in custom_properties.keys():
                 prop_lower = prop_name.lower().replace(' ', '').replace('(', '').replace(')', '')
-                if 'description' in prop_lower or '描述' in prop_name:
-                    has_description = True
+                if 'desc' in prop_lower or 'description' in prop_lower or '描述' in prop_name:
+                    has_desc = True
                 elif 'name' in prop_lower or '名称' in prop_name:
                     has_name = True
-                elif 'semantictype' in prop_lower or '语义类型' in prop_name:
-                    has_semantic_type = True
         
-        # 只添加不存在的标准属性
-        if not has_description:
-            properties['description'] = {
-                'name': 'description(描述)',
-                'type': 'Text'
+        # 只添加不存在的标准属性（符合OpenSPG标准）
+        if not has_desc:
+            properties['desc'] = {
+                'name': 'desc(描述)',
+                'type': 'Text',
+                'constraint': 'NotNull'
             }
         
         if not has_name:
             properties['name'] = {
                 'name': 'name(名称)',
-                'type': 'Text'
+                'type': 'Text',
+                'constraint': 'NotNull'
             }
-        
-        # 不再自动添加semanticType属性，因为这不是标准属性
-        # semanticType和index应该由用户明确指定，而不是自动添加
         
         # 添加自定义属性
         if custom_properties:
             for prop_name, prop_value in custom_properties.items():
-                # 检查属性名是否已经包含中文说明
-                if '(' in prop_name and ')' in prop_name:
-                    # 已经是正确格式（如："description (描述)"），直接使用
+                # 跳过已经处理的标准属性
+                prop_lower = prop_name.lower().replace(' ', '').replace('(', '').replace(')', '')
+                if ('desc' in prop_lower or 'description' in prop_lower or '描述' in prop_name or
+                    'name' in prop_lower or '名称' in prop_name):
+                    continue
+                
+                # 检查是否是新的OpenSPG格式（包含name、type、constraint字段）
+                if isinstance(prop_value, dict) and 'name' in prop_value and 'type' in prop_value:
+                    # 新的OpenSPG格式，直接使用
                     properties[prop_name] = {
-                        'name': prop_name,
-                        'type': 'Text'
+                        'name': prop_value.get('name', f"{prop_name}({prop_name})"),
+                        'type': prop_value.get('type', 'Text'),
+                        'constraint': prop_value.get('constraint', 'NotNull')
                     }
                 else:
-                    # 旧格式，添加中文说明
-                    properties[prop_name] = {
-                        'name': f"{prop_name}({prop_name})",
-                        'type': 'Text'
-                    }
+                    # 检查属性名是否已经包含中文说明
+                    if '(' in prop_name and ')' in prop_name:
+                        # 已经是正确格式（如："property(属性)"），直接使用
+                        properties[prop_name] = {
+                            'name': prop_name,
+                            'type': 'Text',
+                            'constraint': 'NotNull'
+                        }
+                    else:
+                        # 旧格式，添加中文说明
+                        properties[prop_name] = {
+                            'name': f"{prop_name}({prop_name})",
+                            'type': 'Text',
+                            'constraint': 'NotNull'
+                        }
         
         return properties
     

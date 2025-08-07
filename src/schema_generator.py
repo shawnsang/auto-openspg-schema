@@ -140,44 +140,102 @@ class SchemaGenerator:
         return suggestions
     
     def _standardize_entity(self, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """标准化实体格式"""
-        
-        if not entity.get('name'):
+        """标准化实体格式（符合OpenSPG标准）"""
+        try:
+            # 获取基本信息
+            entity_name = entity.get('name', '').strip()
+            chinese_name = entity.get('chinese_name', '').strip()
+            description = entity.get('description', '').strip()
+            
+            # 如果name字段包含中文名称（格式：englishName(中文名)），则提取分离
+            if not chinese_name and '(' in entity_name and ')' in entity_name:
+                match = re.match(r'^([^()]+)\(([^()]+)\)$', entity_name)
+                if match:
+                    entity_name = match.group(1).strip()
+                    chinese_name = match.group(2).strip()
+                    logger.debug(f"从name字段提取: 英文名='{entity_name}', 中文名='{chinese_name}'")
+            
+            # 验证必需字段
+            if not entity_name:
+                logger.warning(f"实体缺少英文名称，跳过")
+                return None
+            
+            if not chinese_name:
+                # 如果没有中文名称，使用英文名称
+                chinese_name = entity_name
+                logger.debug(f"实体 '{entity_name}' 缺少中文名称，使用英文名称")
+            
+            # 修复英文名称格式
+            fixed_english_name = self._fix_english_name(entity_name)
+            if fixed_english_name != entity_name:
+                logger.info(f"修复实体英文名称: {entity_name} -> {fixed_english_name}")
+                entity_name = fixed_english_name
+            
+            # 构建标准化实体
+            standardized_entity = {
+                'name': entity_name,
+                'chinese_name': chinese_name,
+                'english_name': entity_name,  # 保持向后兼容
+                'description': description,
+                'openspg_type': entity.get('openspg_type', 'EntityType'),
+                'traditional_type': entity.get('type', '实体'),
+                'category': entity.get('category', '其他'),  # 向后兼容
+                'type': entity.get('type', '实体'),  # 向后兼容
+                'properties': {},
+                'relations': {}
+            }
+            
+            # 处理属性
+            if entity.get('properties'):
+                standardized_entity['properties'] = self._build_entity_properties(entity)
+            
+            # 处理关系
+            if entity.get('relations'):
+                standardized_entity['relations'] = self._build_entity_relations(entity)
+            
+            logger.debug(f"标准化实体完成: {entity_name}")
+            return standardized_entity
+            
+        except Exception as e:
+            logger.error(f"标准化实体时发生错误: {e}")
             return None
+    
+    def _validate_english_name(self, name: str) -> bool:
+        """验证英文名称是否符合OpenSPG规范"""
+        if not name:
+            return False
         
-        # 获取实体基本信息
-        original_name = entity.get('name', '').strip()
-        description = entity.get('description', '').strip()
-        category = entity.get('category', '其他')
+        # 检查是否以大写字母开头
+        if not name[0].isupper():
+            return False
         
-        # 获取英文名称（使用LLM提供的）
-        english_name = entity.get('english_name', '').strip()
-        if not english_name:
-            logger.warning(f"实体 '{original_name}' 缺少英文名称，跳过")
-            return None
-
-        logger.debug(f"实体名称: {original_name}")
-        logger.debug(f"英文名称: {english_name}")
-
+        # 检查是否只包含字母和数字
+        if not name.replace('_', '').replace('-', '').isalnum():
+            return False
         
-        # 确定实体类型
-        entity_type = self._map_category_to_type(category)
+        # 检查是否包含非法字符
+        if '_' in name or '-' in name or any(c.isspace() for c in name):
+            return False
         
-        # 构建关系
-        relations = self._build_entity_relations(entity)
+        return True
+    
+    def _fix_english_name(self, name: str) -> str:
+        """尝试修复英文名称格式"""
+        if not name:
+            return ''
         
-        # 构建标准化实体
-        standardized = {
-            'name': english_name,  # 使用英文名称
-            'chinese_name': original_name,  # 保留原始中文名称
-            'description': description,
-            'type': entity_type,
-            'properties': self._build_entity_properties(entity),
-            'relations': relations
-        }
+        # 移除特殊字符和空格
+        fixed = re.sub(r'[^a-zA-Z0-9]', '', name)
         
-        logger.debug(f"标准化后的实体: {standardized}")
-        return standardized
+        # 确保首字母大写
+        if fixed and fixed[0].islower():
+            fixed = fixed[0].upper() + fixed[1:]
+        
+        # 检查是否以数字开头
+        if fixed and fixed[0].isdigit():
+            return ''
+        
+        return fixed if self._validate_english_name(fixed) else ''
     
     def _map_category_to_type(self, category: str) -> str:
         """将类别映射到 OpenSPG 实体类型"""
@@ -195,60 +253,115 @@ class SchemaGenerator:
         return 'Others'
     
     def _build_entity_properties(self, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """构建实体属性"""
-        
+        """构建实体属性（符合OpenSPG标准）"""
         properties = {}
         
-        # 添加必需的基础属性
-        properties['description'] = {
-            'name': 'description(描述)',
-            'type': 'Text'
-        }
-        
-        properties['name'] = {
-            'name': 'name(名称)',
-            'type': 'Text'
-        }
-        
-        # 添加其他标准属性
-        for prop_key, prop_def in self.standard_properties.items():
-            if prop_key not in ['description', 'name']:  # 避免重复基础属性
-                properties[prop_key] = {
-                    'name': prop_def['name'],
-                    'type': prop_def['type']
-                }
+        # 处理自定义属性
+        if entity.get('properties'):
+            for prop_key, prop_value in entity['properties'].items():
+                if isinstance(prop_value, dict):
+                    # 标准化属性名称（首字母小写）
+                    standardized_key = self._standardize_property_name(prop_key)
+                    
+                    # 获取属性信息
+                    prop_name_full = prop_value.get('name', f'{prop_key}({prop_key})')
+                    prop_type = prop_value.get('type', 'Text')
+                    constraint = prop_value.get('constraint', '')
+                    description = prop_value.get('description', '')
+                    
+                    # 验证属性类型是否符合OpenSPG标准
+                    if not self._validate_property_type(prop_type):
+                        logger.warning(f"属性 {prop_key} 的类型 {prop_type} 不符合OpenSPG标准，使用Text类型")
+                        prop_type = 'Text'
+                    
+                    # 提取中文名称
+                    chinese_name = self._extract_chinese_name_from_property(prop_name_full)
+                    
+                    # 如果没有提取到中文名称，使用原始key作为中文名称
+                    if not chinese_name or chinese_name == prop_name_full:
+                        chinese_name = prop_key
+                    
+                    # 构建属性定义
+                    prop_def = {
+                        'name': f'{standardized_key}({chinese_name})',
+                        'type': prop_type,
+                        'chinese_name': chinese_name
+                    }
+                    
+                    if description:
+                        prop_def['description'] = description
+                    
+                    if constraint:
+                        prop_def['constraint'] = constraint
+                    
+                    # 处理子属性
+                    if prop_value.get('properties'):
+                        prop_def['properties'] = {}
+                        for sub_prop_key, sub_prop_value in prop_value['properties'].items():
+                            if isinstance(sub_prop_value, dict):
+                                sub_standardized_key = self._standardize_property_name(sub_prop_key)
+                                sub_prop_name_full = sub_prop_value.get('name', f'{sub_prop_key}({sub_prop_key})')
+                                sub_chinese_name = self._extract_chinese_name_from_property(sub_prop_name_full)
+                                
+                                if not sub_chinese_name or sub_chinese_name == sub_prop_name_full:
+                                    sub_chinese_name = sub_prop_key
+                                
+                                sub_prop_def = {
+                                    'name': f'{sub_standardized_key}({sub_chinese_name})',
+                                    'type': sub_prop_value.get('type', 'Text'),
+                                    'chinese_name': sub_chinese_name
+                                }
+                                
+                                if sub_prop_value.get('description'):
+                                    sub_prop_def['description'] = sub_prop_value['description']
+                                
+                                if sub_prop_value.get('constraint'):
+                                    sub_prop_def['constraint'] = sub_prop_value['constraint']
+                                
+                                prop_def['properties'][sub_standardized_key] = sub_prop_def
+                    
+                    properties[standardized_key] = prop_def
                 
-                # 添加索引信息（如果有）
-                if 'index' in prop_def:
-                    properties[prop_key]['index'] = prop_def['index']
-        
-        # 处理其他属性
-        custom_properties = entity.get('properties', {})
-        for prop_name, prop_desc in custom_properties.items():
-            # 跳过基础属性，避免重复
-            if prop_name in ['description', 'name'] or prop_name in ['description (描述)', 'name (名称)']:
-                continue
-                
-            # 检查是否已经是英文名称加中文说明的格式
-            if '(' in prop_name and ')' in prop_name:
-                # 已经是正确格式，直接使用
-                english_part = prop_name.split('(')[0].strip()
-                standardized_prop_name = self._standardize_property_name(english_part)
-                properties[standardized_prop_name] = {
-                    'name': prop_name,  # 保持原有格式
-                    'type': 'Text',
-                    'description': prop_desc
-                }
-            else:
-                # 旧格式，需要转换
-                standardized_prop_name = self._standardize_property_name(prop_name)
-                properties[standardized_prop_name] = {
-                    'name': f"{standardized_prop_name}({prop_name})",
-                    'type': 'Text',
-                    'description': prop_desc
-                }
+                elif isinstance(prop_value, str):
+                    # 简单字符串格式（向后兼容）
+                    standardized_key = self._standardize_property_name(prop_key)
+                    properties[standardized_key] = {
+                        'name': f'{standardized_key}({prop_value})',
+                        'type': 'Text',
+                        'chinese_name': prop_value
+                    }
         
         return properties
+    
+    def _validate_property_type(self, prop_type: str) -> bool:
+        """验证属性类型是否符合OpenSPG标准"""
+        # 基本类型
+        basic_types = ['Text', 'Integer', 'Float']
+        
+        # 标准类型
+        standard_types = [
+            'STD.ChinaMobile', 'STD.Email', 'STD.IdCardNo', 
+            'STD.MacAddress', 'STD.Date', 'STD.ChinaTelCode', 'STD.Timestamp'
+        ]
+        
+        # 检查是否为基本类型或标准类型
+        if prop_type in basic_types or prop_type in standard_types:
+            return True
+        
+        # 检查是否为实体类型引用（首字母大写的标识符）
+        if prop_type and prop_type[0].isupper() and prop_type.replace('_', '').isalnum():
+            return True
+        
+        return False
+    
+    def _extract_chinese_name_from_property(self, prop_name: str) -> str:
+        """从属性名称中提取中文名称"""
+        # 匹配格式：propertyName(中文名称)
+        import re
+        match = re.search(r'\(([^)]+)\)', prop_name)
+        if match:
+            return match.group(1)
+        return prop_name
     
     def _standardize_property_name(self, prop_name: str) -> str:
         """标准化属性名"""
@@ -257,9 +370,28 @@ class SchemaGenerator:
         import re
         standardized = re.sub(r'[^\w\u4e00-\u9fff]', '', prop_name)
         
+        # 如果是纯中文，转换为拼音或使用英文描述
+        if standardized and all('\u4e00' <= c <= '\u9fff' for c in standardized):
+            # 对于中文属性名，使用简化的英文名称
+            chinese_to_english = {
+                '名称': 'name',
+                '描述': 'description', 
+                '类型': 'type',
+                '值': 'value',
+                '属性': 'property',
+                '参数': 'parameter',
+                '配置': 'config',
+                '设置': 'setting'
+            }
+            standardized = chinese_to_english.get(standardized, f'prop_{len(standardized)}')
+        
         # 确保以字母开头
         if standardized and not standardized[0].isalpha():
             standardized = 'prop_' + standardized
+        
+        # 确保首字母小写（符合camelCase规范）
+        if standardized and standardized[0].isupper():
+            standardized = standardized[0].lower() + standardized[1:]
         
         return standardized or 'customProperty'
     
@@ -268,33 +400,84 @@ class SchemaGenerator:
 
     
     def _build_entity_relations(self, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """构建实体关系"""
+        """构建实体关系（符合OpenSPG标准）"""
         relations = {}
         
-        # 获取原始关系数据
-        raw_relations = entity.get('relations', {})
-        
-        if not raw_relations:
-            return relations
-        
-        # 处理每个关系
-        for relation_key, relation_value in raw_relations.items():
-            # 检查是否已经是英文名称加中文说明的格式
-            if '(' in relation_key and ')' in relation_key:
-                # 已经是正确格式，直接使用
-                english_part = relation_key.split('(')[0].strip()
-                relation_name = self._standardize_relation_name(english_part)
-                relations[relation_name] = {
-                    'name': relation_key,  # 保持原有格式
-                    'target': relation_value  # 直接使用关系目标值
-                }
-            else:
-                # 旧格式，需要转换
-                relation_name = self._standardize_relation_name(relation_key)
-                relations[relation_name] = {
-                    'name': f"{relation_name}({relation_key})",
-                    'target': relation_value  # 直接使用关系目标值
-                }
+        # 处理关系信息
+        if entity.get('relations'):
+            for rel_key, rel_value in entity['relations'].items():
+                if isinstance(rel_value, dict):
+                    # 标准化关系名称（首字母小写）
+                    standardized_key = self._standardize_relation_name(rel_key)
+                    
+                    # 获取关系信息
+                    rel_name_full = rel_value.get('name', f'{rel_key}({rel_key})')
+                    target = rel_value.get('target', 'Entity')
+                    constraint = rel_value.get('constraint', '')
+                    description = rel_value.get('description', '')
+                    
+                    # 提取中文名称
+                    chinese_name = self._extract_chinese_name_from_property(rel_name_full)
+                    if not chinese_name or chinese_name == rel_name_full:
+                        chinese_name = rel_key
+                    
+                    # 构建关系定义
+                    rel_def = {
+                        'name': f'{standardized_key}({chinese_name})',
+                        'target': target,
+                        'chinese_name': chinese_name
+                    }
+                    
+                    if description:
+                        rel_def['description'] = description
+                    
+                    if constraint:
+                        rel_def['constraint'] = constraint
+                    
+                    # 处理关系属性（只支持基本类型）
+                    if rel_value.get('properties'):
+                        rel_def['properties'] = {}
+                        for rel_prop_key, rel_prop_value in rel_value['properties'].items():
+                            if isinstance(rel_prop_value, dict):
+                                rel_prop_standardized_key = self._standardize_property_name(rel_prop_key)
+                                
+                                # 验证关系属性类型（只支持基本类型）
+                                rel_prop_type = rel_prop_value.get('type', 'Text')
+                                if rel_prop_type not in ['Text', 'Integer', 'Float']:
+                                    logger.warning(f"关系属性 {rel_prop_key} 的类型 {rel_prop_type} 不符合OpenSPG标准（关系属性只支持基本类型），使用Text类型")
+                                    rel_prop_type = 'Text'
+                                
+                                # 处理关系属性名称
+                                rel_prop_name_full = rel_prop_value.get('name', f'{rel_prop_key}({rel_prop_key})')
+                                rel_prop_chinese_name = self._extract_chinese_name_from_property(rel_prop_name_full)
+                                
+                                if not rel_prop_chinese_name or rel_prop_chinese_name == rel_prop_name_full:
+                                    rel_prop_chinese_name = rel_prop_key
+                                
+                                rel_prop_def = {
+                                    'name': f'{rel_prop_standardized_key}({rel_prop_chinese_name})',
+                                    'type': rel_prop_type,
+                                    'chinese_name': rel_prop_chinese_name
+                                }
+                                
+                                if rel_prop_value.get('description'):
+                                    rel_prop_def['description'] = rel_prop_value['description']
+                                
+                                if rel_prop_value.get('constraint'):
+                                    rel_prop_def['constraint'] = rel_prop_value['constraint']
+                                
+                                rel_def['properties'][rel_prop_standardized_key] = rel_prop_def
+                    
+                    relations[standardized_key] = rel_def
+                
+                elif isinstance(rel_value, str):
+                    # 简单字符串格式（向后兼容）
+                    standardized_key = self._standardize_relation_name(rel_key)
+                    relations[standardized_key] = {
+                        'name': f'{standardized_key}({rel_value})',
+                        'target': 'Entity',
+                        'chinese_name': rel_value
+                    }
         
         return relations
     
@@ -314,64 +497,319 @@ class SchemaGenerator:
         return 'relatesTo'
     
     def generate_entity_schema_string(self, entity: Dict[str, Any]) -> str:
-        """生成单个实体的 Schema 字符串"""
+        """生成单个实体的 Schema 字符串（符合OpenSPG标准）"""
         
         lines = []
         
-        # 实体定义行
-        entity_line = f"{entity['name']}({entity['chinese_name']}): EntityType"
+        # 实体定义行（使用OpenSPG类型）
+        openspg_type = entity.get('openspg_type', 'EntityType')
+        entity_line = f"{entity['name']}({entity['chinese_name']}): {openspg_type}"
         lines.append(entity_line)
         
-        # 属性部分（必须包含）
-        if entity.get('properties'):
-            lines.append("\tproperties:")
+        # 添加描述
+        if entity.get('description'):
+            lines.append(f"    desc: {entity['description']}")
+        
+        # 属性部分（必须包含标准属性）
+        properties = entity.get('properties', {})
+        
+        # 确保包含标准属性
+        standard_props = {}
+        
+        # 检查是否已有desc属性
+        has_desc = any('desc' in key.lower() or 'description' in key.lower() for key in properties.keys())
+        if not has_desc:
+            standard_props['desc'] = {
+                'name': 'desc(描述)',
+                'type': 'Text',
+                'constraint': 'NotNull'
+            }
+        
+        # 检查是否已有name属性
+        has_name = any('name' in key.lower() and 'chinese' not in key.lower() for key in properties.keys())
+        if not has_name:
+            standard_props['name'] = {
+                'name': 'name(名称)',
+                'type': 'Text',
+                'constraint': 'NotNull'
+            }
+        
+        # 合并标准属性和自定义属性
+        all_properties = {**standard_props, **properties}
+        
+        if all_properties:
+            lines.append("    properties:")
             
-            for prop_key, prop_def in entity['properties'].items():
-                prop_line = f"\t\t{prop_def['name']}: {prop_def['type']}"
+            for prop_key, prop_def in all_properties.items():
+                # 属性名称和类型（第三层缩进）
+                prop_name = prop_def.get('name', f"{prop_key}({prop_def.get('chinese_name', prop_key)})")
+                prop_line = f"        {prop_name}: {prop_def['type']}"
                 lines.append(prop_line)
                 
-                # 添加索引信息
-                if 'index' in prop_def:
-                    index_line = f"\t\t\tindex: {prop_def['index']}"
-                    lines.append(index_line)
+                # 属性描述（第四层缩进）
+                if prop_def.get('description'):
+                    lines.append(f"            desc: {prop_def['description']}")
+                
+                # 添加约束条件（第四层缩进）
+                if 'constraint' in prop_def and prop_def['constraint']:
+                    lines.append(f"            constraint: {prop_def['constraint']}")
+                
+                # 子属性（第五层缩进）
+                if prop_def.get('properties'):
+                    lines.append("            properties:")
+                    for sub_prop_key, sub_prop_def in prop_def['properties'].items():
+                        sub_prop_line = f"                {sub_prop_key}({sub_prop_def.get('chinese_name', sub_prop_key)}): {sub_prop_def['type']}"
+                        lines.append(sub_prop_line)
+                        
+                        # 子属性描述和约束（第六层缩进）
+                        if sub_prop_def.get('description'):
+                            lines.append(f"                    desc: {sub_prop_def['description']}")
+                        if sub_prop_def.get('constraint'):
+                            lines.append(f"                    constraint: {sub_prop_def['constraint']}")
         
         # 关系部分（可选）
         if entity.get('relations'):
-            lines.append("\trelations:")
+            lines.append("    relations:")
             
             for relation_key, relation_def in entity['relations'].items():
-                relation_line = f"\t\t{relation_def['name']}: {relation_def['target']}"
+                # 关系名称和目标类型（第三层缩进）
+                relation_name = relation_def.get('name', f"{relation_key}({relation_def.get('chinese_name', relation_key)})")
+                relation_line = f"        {relation_name}: {relation_def['target']}"
                 lines.append(relation_line)
+                
+                # 关系描述（第四层缩进）
+                if relation_def.get('description'):
+                    lines.append(f"            desc: {relation_def['description']}")
+                
+                # 关系属性（第四层缩进）
+                if relation_def.get('properties'):
+                    lines.append("            properties:")
+                    for rel_prop_key, rel_prop_def in relation_def['properties'].items():
+                        rel_prop_name = rel_prop_def.get('name', f"{rel_prop_key}({rel_prop_def.get('chinese_name', rel_prop_key)})")
+                        rel_prop_line = f"                {rel_prop_name}: {rel_prop_def['type']}"
+                        lines.append(rel_prop_line)
+                        
+                        # 关系属性描述和约束（第六层缩进）
+                        if rel_prop_def.get('description'):
+                            lines.append(f"                    desc: {rel_prop_def['description']}")
+                        if rel_prop_def.get('constraint'):
+                            lines.append(f"                    constraint: {rel_prop_def['constraint']}")
+                
+                # 关系约束条件（第四层缩进）
+                if 'constraint' in relation_def and relation_def['constraint']:
+                    lines.append(f"            constraint: {relation_def['constraint']}")
         
         return '\n'.join(lines)
     
-    def validate_entity(self, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """验证实体格式"""
+    def generate_complete_schema(self, entities: List[Dict[str, Any]], namespace: str = "DEFAULT") -> str:
+        """生成完整的OpenSPG Schema脚本"""
         
-        validation_result = {
-            'valid': True,
-            'errors': [],
-            'warnings': []
-        }
+        lines = []
         
+        # 添加命名空间声明
+        lines.append(f"namespace {namespace}")
+        lines.append("")
+        
+        # 按依赖顺序排序实体
+        sorted_entities = self._sort_entities_by_dependency(entities)
+        
+        # 生成每个实体的Schema定义
+        for i, entity in enumerate(sorted_entities):
+            entity_schema = self.generate_entity_schema_string(entity)
+            lines.append(entity_schema)
+            
+            # 在实体之间添加空行（除了最后一个）
+            if i < len(sorted_entities) - 1:
+                lines.append("")
+        
+        return '\n'.join(lines)
+    
+    def _sort_entities_by_dependency(self, entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """按依赖关系对实体进行排序，确保被引用的实体在引用它的实体之前定义"""
+        
+        # 创建实体名称到实体的映射
+        entity_map = {entity['name']: entity for entity in entities}
+        
+        # 构建依赖图
+        dependencies = {}
+        for entity in entities:
+            entity_name = entity['name']
+            dependencies[entity_name] = set()
+            
+            # 检查属性中的依赖
+            if entity.get('properties'):
+                for prop_def in entity['properties'].values():
+                    prop_type = prop_def.get('type', '')
+                    # 如果属性类型是自定义实体类型
+                    if prop_type in entity_map and prop_type != entity_name:
+                        dependencies[entity_name].add(prop_type)
+            
+            # 检查关系中的依赖
+            if entity.get('relations'):
+                for rel_def in entity['relations'].values():
+                    target = rel_def.get('target', '')
+                    if target in entity_map and target != entity_name:
+                        dependencies[entity_name].add(target)
+        
+        # 拓扑排序
+        sorted_entities = []
+        visited = set()
+        temp_visited = set()
+        
+        def dfs(entity_name):
+            if entity_name in temp_visited:
+                # 检测到循环依赖，记录警告但继续处理
+                logger.warning(f"检测到循环依赖，涉及实体: {entity_name}")
+                return
+            
+            if entity_name in visited:
+                return
+            
+            temp_visited.add(entity_name)
+            
+            # 先访问依赖的实体
+            for dep in dependencies.get(entity_name, set()):
+                if dep in entity_map:
+                    dfs(dep)
+            
+            temp_visited.remove(entity_name)
+            visited.add(entity_name)
+            
+            if entity_name in entity_map:
+                sorted_entities.append(entity_map[entity_name])
+        
+        # 对所有实体进行DFS
+        for entity_name in entity_map.keys():
+            if entity_name not in visited:
+                dfs(entity_name)
+        
+        logger.info(f"实体依赖排序完成，排序后顺序: {[e['name'] for e in sorted_entities]}")
+        
+        return sorted_entities
+    
+    def validate_entity(self, entity: Dict[str, Any]) -> bool:
+        """验证实体格式是否符合OpenSPG标准"""
+        try:
+            # 检查必需字段
+            if not entity.get('name'):
+                logger.error(f"实体缺少名称: {entity}")
+                return False
+            
+            if not entity.get('chinese_name'):
+                logger.error(f"实体缺少中文名称: {entity}")
+                return False
+            
+            # 检查英文名称格式（首字母大写）
+            english_name = entity['name']
+            if not self._validate_english_name(english_name):
+                logger.error(f"英文名称格式不正确: {english_name}")
+                return False
+            
+            # 检查OpenSPG实体类型
+            openspg_type = entity.get('openspg_type')
+            if openspg_type not in ['EntityType', 'ConceptType', 'EventType']:
+                logger.error(f"OpenSPG实体类型不正确: {openspg_type}")
+                return False
+            
+            # 检查传统实体类型（允许更宽松的验证）
+            traditional_type = entity.get('type')
+            if traditional_type:
+                # 允许所有映射值以及一些常见的类型
+                allowed_types = set(self.entity_type_mapping.values())
+                allowed_types.update(['实体', 'Entity', 'Concept', 'Object'])
+                if traditional_type not in allowed_types:
+                    logger.warning(f"传统实体类型可能不标准: {traditional_type}")
+                    # 不返回False，只是警告
+            
+            # 验证属性
+            properties = entity.get('properties', {})
+            for prop_name, prop_def in properties.items():
+                if not self._validate_property(prop_name, prop_def):
+                    return False
+            
+            # 验证关系
+            relations = entity.get('relations', {})
+            for rel_name, rel_def in relations.items():
+                if not self._validate_relation(rel_name, rel_def):
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"验证实体时发生错误: {e}")
+            return False
+    
+    def _validate_property(self, prop_name: str, prop_def: Dict[str, Any]) -> bool:
+        """验证属性格式"""
         # 检查必需字段
-        required_fields = ['name', 'type']
-        for field in required_fields:
-            if not entity.get(field):
-                validation_result['valid'] = False
-                validation_result['errors'].append(f"缺少必需字段: {field}")
+        if not prop_def.get('name'):
+            logger.error(f"属性缺少名称: {prop_name}")
+            return False
         
-        # 检查实体名称格式
-        if entity.get('name'):
-            name = entity['name']
-            if not name.replace('_', '').replace('-', '').isalnum():
-                validation_result['warnings'].append(f"实体名称包含特殊字符: {name}")
+        if not prop_def.get('type'):
+            logger.error(f"属性缺少类型: {prop_name}")
+            return False
         
-        # 检查实体类型
-        if entity.get('type') and entity['type'] not in self.entity_type_mapping.values():
-            validation_result['warnings'].append(f"未知的实体类型: {entity['type']}")
+        # 验证属性类型
+        prop_type = prop_def['type']
+        valid_basic_types = ['Text', 'Integer', 'Float']
+        valid_std_types = ['STD.ChinaMobile', 'STD.Email', 'STD.IdCardNo', 'STD.MacAddress', 
+                          'STD.Date', 'STD.ChinaTelCode', 'STD.Timestamp']
         
-        return validation_result
+        if prop_type not in valid_basic_types and prop_type not in valid_std_types:
+            # 可能是实体类型引用，暂时允许
+            logger.debug(f"属性类型可能是实体引用: {prop_type}")
+        
+        # 检查约束条件
+        constraint = prop_def.get('constraint', '')
+        if constraint:
+            valid_constraints = ['NotNull', 'MultiValue', 'Enum', 'Regular']
+            constraint_parts = [c.strip() for c in constraint.split(',')]
+            for part in constraint_parts:
+                if '=' in part:
+                    constraint_type = part.split('=')[0].strip()
+                    if constraint_type not in valid_constraints:
+                        logger.warning(f"未知约束类型: {constraint_type}")
+                elif part not in valid_constraints:
+                    logger.warning(f"未知约束: {part}")
+        
+        # 验证子属性
+        if prop_def.get('properties'):
+            for sub_prop_name, sub_prop_def in prop_def['properties'].items():
+                if not self._validate_property(sub_prop_name, sub_prop_def):
+                    return False
+        
+        return True
+    
+    def _validate_relation(self, rel_name: str, rel_def: Dict[str, Any]) -> bool:
+        """验证关系格式"""
+        # 检查必需字段
+        if not rel_def.get('name'):
+            logger.error(f"关系缺少名称: {rel_name}")
+            return False
+        
+        if not rel_def.get('target'):
+            logger.error(f"关系缺少目标类型: {rel_name}")
+            return False
+        
+        # 检查约束条件
+        constraint = rel_def.get('constraint', '')
+        if constraint:
+            valid_constraints = ['NotNull', 'MultiValue']
+            constraint_parts = [c.strip() for c in constraint.split(',')]
+            for part in constraint_parts:
+                if part not in valid_constraints:
+                    logger.warning(f"关系约束不正确: {part}")
+        
+        # 验证关系属性（只支持基本类型）
+        if rel_def.get('properties'):
+            for rel_prop_name, rel_prop_def in rel_def['properties'].items():
+                rel_prop_type = rel_prop_def.get('type', 'Text')
+                if rel_prop_type not in ['Text', 'Integer', 'Float']:
+                    logger.error(f"关系属性 {rel_prop_name} 的类型 {rel_prop_type} 不符合OpenSPG标准（关系属性只支持基本类型）")
+                    return False
+        
+        return True
     
     def get_supported_entity_types(self) -> List[str]:
         """获取支持的实体类型列表"""

@@ -153,10 +153,8 @@ def main():
             if stats['entity_count'] > 0:
                 st.info(f"📊 当前 Schema: {stats['entity_count']} 个实体类型")
     
-    # 主界面
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
+    # 主内容区域
+    with st.container():
         st.header("📄 文档上传")
         
         # 分批处理提示
@@ -183,8 +181,7 @@ def main():
                     f"⚠️ 当前上传了 {len(uploaded_files)} 个文件，建议分批处理以获得更好的性能。"
                     "您可以先处理部分文件，保存 Schema 后再继续处理其余文件。"
                 )
-    
-    with col2:
+        
         st.header("🎯 当前 Schema")
         
         # 初始化 session state
@@ -203,110 +200,107 @@ def main():
             st.metric("属性总数", stats['property_count'])
         with col2_3:
             st.metric("已处理文档", len(st.session_state.processing_results))
-    
-    # 处理按钮
-    st.markdown("---")
-    
-    # 检查必要条件
-    can_process = uploaded_files and (provider == "Ollama" or api_key)
-    
-    if st.button("🚀 开始处理文档", type="primary", disabled=not can_process):
-        if provider == "OpenAI" and not api_key:
-            st.error("请提供 OpenAI API Key")
-        elif not uploaded_files:
-            st.error("请上传至少一个文档")
-        else:
-            process_documents(
-                uploaded_files, provider.lower(), api_key, model_name, base_url,
-                chunk_size, chunk_overlap, namespace, domain_expertise
-            )
-    
-    # 显示处理结果
-    if st.session_state.processing_results:
-        st.header("📊 处理结果")
         
-        for i, result in enumerate(st.session_state.processing_results):
-            with st.expander(f"文档 {i+1}: {result['filename']} - {result['timestamp']}"):
-                col_r1, col_r2, col_r3 = st.columns(3)
-                
-                with col_r1:
-                    st.metric("新增实体", result['stats']['new_entities'])
-                with col_r2:
-                    st.metric("修改实体", result['stats']['modified_entities'])
-                with col_r3:
-                    st.metric("建议删除", len(result['stats']['suggested_deletions']))
-                
-                if result['stats']['suggested_deletions']:
-                    st.subheader("建议删除的实体:")
-                    for deletion in result['stats']['suggested_deletions']:
-                        st.warning(f"**{deletion['entity']}**: {deletion['reason']}")
-    
-    # Schema 预览和下载
-    st.markdown("---")
-    st.header("📋 Schema 预览")
-    
-    col_s1, col_s2 = st.columns([3, 1])
-    
-    with col_s1:
-        schema_content = st.session_state.schema_manager.generate_schema_string()
-        st.code(schema_content, language="text")
-    
-    with col_s2:
-        st.subheader("操作")
+        # 处理按钮
+        st.markdown("---")
         
-        # 复制按钮
-        if st.button("📋 复制 Schema"):
-            st.code(schema_content)
-            st.success("Schema 已显示，请手动复制")
+        # 检查必要条件
+        can_process = uploaded_files and (provider == "Ollama" or api_key)
         
-        # 下载格式选择
-        download_format = st.selectbox(
-            "下载格式",
-            ["OpenSPG Schema", "YAML", "JSON"],
-            help="选择下载的文件格式"
-        )
+        if st.button("🚀 开始处理文档", type="primary", disabled=not can_process):
+            if provider == "OpenAI" and not api_key:
+                st.error("请提供 OpenAI API Key")
+            elif not uploaded_files:
+                st.error("请上传至少一个文档")
+            else:
+                process_documents(
+                    uploaded_files, provider.lower(), api_key, model_name, base_url,
+                    chunk_size, chunk_overlap, namespace, domain_expertise
+                )
         
-        # 根据选择的格式准备下载内容
-        if download_format == "OpenSPG Schema":
-            download_content = schema_content
-            file_extension = "txt"
-            mime_type = "text/plain"
-        elif download_format == "YAML":
-            download_content = st.session_state.schema_manager.export_to_yaml()
-            file_extension = "yaml"
-            mime_type = "text/yaml"
-        else:  # JSON
-            download_content = st.session_state.schema_manager.export_to_json()
-            file_extension = "json"
-            mime_type = "application/json"
-        
-        # 下载按钮
-        st.download_button(
-            label=f"💾 下载 {download_format}",
-            data=download_content,
-            file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
-            mime=mime_type
-        )
-        
-        # 清空按钮
-        if st.button("🗑️ 清空 Schema", type="secondary"):
-            st.session_state.schema_manager = SchemaManager(namespace)
-            st.session_state.processing_results = []
-            st.rerun()
-        
-        # 显示统计信息
-        if st.session_state.schema_manager.entities:
-            stats = st.session_state.schema_manager.get_statistics()
-            st.markdown("---")
-            st.subheader("📊 统计信息")
-            st.metric("实体数量", stats['entity_count'])
-            st.metric("属性数量", stats['property_count'])
+        # 显示处理结果
+        if st.session_state.processing_results:
+            st.header("📊 处理结果")
             
-            # 显示实体类型分布
-            if stats['entity_types']:
-                st.write("**实体类型分布:**")
-                for entity_type, count in stats['entity_types'].items():
-                    st.write(f"- {entity_type}: {count}")
+            for i, result in enumerate(st.session_state.processing_results):
+                with st.expander(f"文档 {i+1}: {result['filename']} - {result['timestamp']}"):
+                    col_r1, col_r2, col_r3 = st.columns(3)
+                    
+                    with col_r1:
+                        st.metric("新增实体", result['stats']['new_entities'])
+                    with col_r2:
+                        st.metric("修改实体", result['stats']['modified_entities'])
+                    with col_r3:
+                        st.metric("建议删除", len(result['stats']['suggested_deletions']))
+                    
+                    if result['stats']['suggested_deletions']:
+                        st.subheader("建议删除的实体:")
+                        for deletion in result['stats']['suggested_deletions']:
+                            st.warning(f"**{deletion['entity']}**: {deletion['reason']}")
+        
+        # Schema 预览和下载
+        st.markdown("---")
+        st.header("📋 Schema 预览")
+        
+        if 'schema_manager' in st.session_state:
+            schema_content = st.session_state.schema_manager.generate_schema_string()
+            st.code(schema_content, language="text")
+        
+            st.subheader("操作")
+            
+            # 复制按钮
+            if st.button("📋 复制 Schema"):
+                st.code(schema_content)
+                st.success("Schema 已显示，请手动复制")
+            
+            # 下载格式选择
+            download_format = st.selectbox(
+                "下载格式",
+                ["OpenSPG Schema", "YAML", "JSON"],
+                help="选择下载的文件格式"
+            )
+            
+            # 根据选择的格式准备下载内容
+            if download_format == "OpenSPG Schema":
+                download_content = schema_content
+                file_extension = "txt"
+                mime_type = "text/plain"
+            elif download_format == "YAML":
+                download_content = st.session_state.schema_manager.export_to_yaml()
+                file_extension = "yaml"
+                mime_type = "text/yaml"
+            else:  # JSON
+                download_content = st.session_state.schema_manager.export_to_json()
+                file_extension = "json"
+                mime_type = "application/json"
+            
+            # 下载按钮
+            st.download_button(
+                label=f"💾 下载 {download_format}",
+                data=download_content,
+                file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
+                mime=mime_type
+            )
+            
+            # 清空按钮
+            if st.button("🗑️ 清空 Schema", type="secondary"):
+                st.session_state.schema_manager = SchemaManager(namespace)
+                st.session_state.processing_results = []
+                st.rerun()
+            
+            # 显示统计信息
+            if st.session_state.schema_manager.entities:
+                stats = st.session_state.schema_manager.get_statistics()
+                st.markdown("---")
+                st.subheader("📊 统计信息")
+                st.metric("实体数量", stats['entity_count'])
+                st.metric("属性数量", stats['property_count'])
+                
+                # 显示实体类型分布
+                if stats['entity_types']:
+                    st.write("**实体类型分布:**")
+                    for entity_type, count in stats['entity_types'].items():
+                        st.write(f"- {entity_type}: {count}")
 
 def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise=""):
     """处理上传的文档"""
@@ -378,7 +372,7 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 logger.debug(f"从分块 {chunk_idx + 1} 提取到 {len(entities)} 个实体")
                 
                 for entity in entities:
-                    logger.debug(f"处理实体: {entity['name']}")
+                    logger.debug(f"处理实体: {entity}")
                     result = st.session_state.schema_manager.add_or_update_entity(
                         entity['name'], entity['description'], entity.get('properties', {}), 
                         entity.get('chinese_name'), entity.get('relations', {})
@@ -487,8 +481,6 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
     
     progress_bar.progress(1.0)
     status_text.text("处理完成！")
-    
-    status_text.text("处理完成!")
     st.success(f"成功处理 {len(uploaded_files)} 个文档")
     st.rerun()
 

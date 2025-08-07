@@ -3,6 +3,7 @@ import requests
 from typing import List, Dict, Any, Optional, Union
 import json
 import time
+import re
 from abc import ABC, abstractmethod
 from .logger import logger
 
@@ -290,9 +291,9 @@ class LLMClient:
         
         # 根据专业领域生成角色定义
         if self.domain_expertise:
-            system_content = f"你是一个专业的知识图谱构建专家，特别擅长{self.domain_expertise}领域的技术文档分析和结构化信息提取。你对{self.domain_expertise}的专业术语、概念、工艺流程、设备组件等有深入的理解。"
+            system_content = f"你是一个专业的OpenSPG知识图谱构建专家，特别擅长{self.domain_expertise}领域的技术文档分析和结构化信息提取。你对{self.domain_expertise}的专业术语、概念、工艺流程、设备组件等有深入的理解，并能准确生成符合OpenSPG语法规范的Schema定义。"
         else:
-            system_content = "你是一个专业的知识图谱构建专家，擅长从技术文档中提取结构化信息。"
+            system_content = "你是一个专业的OpenSPG知识图谱构建专家，擅长从技术文档中提取结构化信息并生成符合OpenSPG语法规范的Schema定义。"
         
         return [
             {
@@ -302,69 +303,143 @@ class LLMClient:
             {
                 "role": "user",
                 "content": f"""
-你是一个专业的知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下{'工程设计' if not self.domain_expertise else self.domain_expertise}文档文本中提取实体信息，并按照 OpenSPG 的标准格式组织。
+你是一个专业的OpenSPG知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下{'工程设计' if not self.domain_expertise else self.domain_expertise}文档文本中提取实体信息，并按照OpenSPG声明式Schema脚本的标准格式组织。
 
 文档文本：
 {text}
 
-请提取以下类型的实体：
-1. 工程概念和术语
-2. 设备和组件
-3. 材料和物质
-4. 工艺和流程
-5. 标准和规范
-6. 人员和组织
-7. 地理位置
-8. 时间和日期
-9. 数值和参数
-10. 其他专业概念
+## OpenSPG Schema语法规范
 
-对于每个实体，请提供：
-- name: 实体名称（使用简洁的标准中文术语，提取核心概念，不要使用完整的文档标题，不包含引号、逗号、空格等特殊字符）
+### 约束条件
+1. 声明式Schema脚本采用逐行解析的方式，定义上要遵循顺序原则，即父类型要在子类型之前定义、属性上使用的类型也需要在其所属类型定义之前先定义好
+2. 属性id、name、description为内置属性，不需要再声明
+3. 属性类型只支持以下几种：
+   - 基本类型：Text(文本)、Integer(整型)、Float(浮点数)
+   - 标准类型：STD.ChinaMobile(国内手机号)、STD.Email(电子邮箱)、STD.IdCardNo(身份证)、STD.MacAddress(MAC地址)、STD.Date(日期)、STD.ChinaTelCode(国内通讯号)、STD.Timestamp(时间戳)
+4. 属性英文名称首字母必须为小写字母，且只支持英文字母和数字
+5. 关系属性类型只支持基本类型
+
+### 语法结构（6层缩进）
+- 第一层（无缩进）：定义类型、命名空间
+- 第二层：定义类型的元信息，比如描述、属性、关系等
+- 第三层：定义属性/关系的名称和类型
+- 第四层：定义属性/关系的元信息，比如约束、子属性、逻辑规则等
+- 第五层：定义子属性的名称和类型
+- 第六层：定义子属性的元信息，比如描述、约束
+
+### 标准格式示例
+```
+namespace DEFAULT
+
+TypeA(实体类型A): EntityType
+    desc: 实体类型描述
+    properties:
+        property1(属性1): Text
+            desc: 属性1的描述
+            constraint: NotNull, MultiValue
+        property2(属性2): Float
+            desc: 属性2的描述
+            constraint: NotNull
+    relations:
+        relation1(关系1): TypeB
+            desc: 关系1的描述
+            properties:
+                confidence(置信度): Float
+                    desc: 关系置信度
+                    constraint: NotNull
+
+TypeB(实体类型B): EntityType
+    desc: 实体类型B的描述
+```
+
+## 任务要求
+
+请从文档中提取以下类型的实体：
+1. 工程概念和术语 (ConceptType)
+2. 设备和组件 (EntityType)
+3. 材料和物质 (EntityType)
+4. 工艺和流程 (ConceptType)
+5. 标准和规范 (EntityType)
+6. 人员和组织 (EntityType)
+7. 地理位置 (EntityType)
+8. 时间和日期 (EntityType)
+9. 数值和参数 (ConceptType)
+10. 事件和活动 (EventType)
+11. 其他专业概念 (ConceptType)
+
+对于每个实体，请提供以下信息：
+- name: 实体英文名称（首字母大写，驼峰命名，只含字母数字）
+- chinese_name: 实体中文名称（简洁的标准术语）
 - description: 实体描述
-- category: 实体类别（从上述类型中选择最合适的）
-- properties: 相关属性（必须包含，如果没有特殊属性，至少包含description和name）
-- relations: 与其他实体的关系（推荐包含，积极识别实体间的各种关系）
+- category: 实体类别（从上述类型中选择）
+- entity_type: OpenSPG实体类型（EntityType/ConceptType/EventType）
+- properties: 相关属性（符合OpenSPG属性定义标准）
+- relations: 与其他实体的关系（符合OpenSPG关系定义标准）
 
-请以 JSON 格式返回结果：
+请以JSON格式返回结果：
 [
     {{
-        "name": "实体中文名称",
-        "english_name": "EntityEnglishName",
+        "name": "EntityEnglishName",
+        "chinese_name": "实体中文名称",
         "description": "实体描述",
         "category": "实体类别",
+        "entity_type": "EntityType|ConceptType|EventType",
         "properties": {{
-            "description (描述)": "属性的详细描述",
-            "name (名称)": "实体的标准名称",
-            "otherPropertyName (其他属性名)": "属性的具体描述"
+            "propertyName": {{
+                "name": "propertyName(属性中文名)",
+                "type": "Text|Float|Integer|STD.Date|STD.Email等",
+                "constraint": "NotNull|MultiValue|Enum等",
+                "description": "属性描述"
+            }}
         }},
         "relations": {{
-            "relationName (关系名称)": "目标实体名称"
+            "relationName": {{
+                "name": "relationName(关系中文名)",
+                "target": "目标实体英文名称",
+                "constraint": "NotNull|MultiValue",
+                "description": "关系描述",
+                "properties": {{
+                    "confidence": {{
+                        "name": "confidence(置信度)",
+                        "type": "Float",
+                        "constraint": "NotNull"
+                    }}
+                }}
+            }}
         }}
     }}
 ]
 
-注意：
-1. 只提取在文档中明确提到的实体
-2. name字段：实体的中文名称，应该是标准化的专业术语，使用规范中文，不包含标点符号、空格等特殊字符
-3. english_name字段：实体的英文名称，必须以大写字母开头，只能包含字母和数字，总长度不超过50个字符（如：ConstructionTechnology、WaterproofSystem、TunnelConstruction）
-4. 描述应该简洁明了
-5. 如果文档中没有明确的实体，返回空数组 []
-6. 实体命名原则：提取核心概念，不要使用完整的文档标题或长句作为实体名称
-7. 中文名称示例："施工放线"、"混凝土"、"钢筋"、"电气系统"、"隧道工程"、"标准化手册"（正确）
-8. 英文名称示例："ConstructionLayout"、"Concrete"、"Rebar"、"ElectricalSystem"、"TunnelEngineering"、"StandardManual"（正确）
-9. 避免："施工放线,"、"施工放线""、"施工放线,("等包含特殊字符的格式（错误）
-10. 避免："中国交建新疆乌尉公路包标准化实施手册 第五分册 隧道工程"等过长的完整标题作为实体名称（错误）
-11. 避免："Shi_Gong_Fang_Xian"、"ShiGongFangXian"等拼音形式的英文名称（错误）
-12. 避免："3DModel"、"2DDrawing"等以数字开头的英文名称（错误），应使用"ThreeDimensionalModel"、"TwoDimensionalDrawing"（正确）
-13. 避免："施工 放线"、"混凝 土"等包含空格的中文名称（错误）
-14. properties必须包含：每个实体都必须有properties，至少包含"description (描述)"和"name (名称)"
-15. relations推荐：积极识别和提取实体间的关系，包括但不限于：使用关系(usedIn/usedFor)、包含关系(contains/partOf)、连接关系(connectedTo)、依赖关系(dependsOn/requires)、位置关系(locatedIn/installedAt)、材料关系(madeOf/composedOf)、功能关系(serves/supports)等
-16. 关系命名：使用英文名称加中文说明的格式，如"requiresMonitoring (要求监测)"、"appliesTo (适用于)"、"contains (包含)"等
-17. 属性命名：properties中的键名使用英文加中文说明的格式，如"description (描述)"、"material (材料)"、"specification (规格)"等
-18. 属性值：properties中的值应该是属性的中文描述，不是数据类型
-19. 英文名称要求：必须是有意义的英文单词，不能是拼音，应该反映实体的实际含义，不能以数字开头
-20. 实体粒度：优先提取具体的技术概念、设备、材料、工艺等，而不是抽象的文档名称或组织结构
+## 重要注意事项
+
+1. **命名规范**：
+   - 英文名称：首字母大写，驼峰命名，如"TunnelConstruction"、"ConcreteStrength"
+   - 属性名称：首字母小写，如"materialType"、"constructionDate"
+   - 避免使用拼音、数字开头、特殊字符
+
+2. **类型选择**：
+   - EntityType: 具体物理实体（设备、材料、人员、组织等）
+   - ConceptType: 抽象概念（术语、工艺、参数等）
+   - EventType: 事件和活动（施工、检测、验收等）
+
+3. **属性类型**：
+   - 优先使用基本类型：Text、Integer、Float
+   - 特殊情况使用标准类型：STD.Date、STD.Email等
+   - 关系属性只能使用基本类型
+
+4. **约束条件**：
+   - NotNull: 必填属性
+   - MultiValue: 可多值属性
+   - Enum: 枚举值，格式如Enum="A,B,C"
+   - Regular: 正则表达式，格式如Regular="^abc[0-9]+$"
+
+5. **依赖顺序**：
+   - 确保被引用的实体类型在引用它的实体之前定义
+   - 属性中使用的自定义类型需要先定义
+
+6. 只提取文档中明确提到的实体，优先提取核心的技术概念、设备、材料、工艺等
+7. 如果文档中没有明确的实体，返回空数组 []
+8. 确保生成的Schema能够直接用于OpenSPG系统
 """
             }
         ]
@@ -398,6 +473,7 @@ class LLMClient:
                     standardized_entity = {
                         'name': entity_name,
                         'english_name': english_name,
+                        'chinese_name': entity.get('chinese_name', '').strip(),
                         'description': entity.get('description', '').strip(),
                         'category': entity.get('category', 'Others').strip(),
                         'properties': entity.get('properties', {})
@@ -421,7 +497,7 @@ class LLMClient:
                     unique_entities.append(entity)
                     seen_names.add(entity_name)
                 else:
-                    self.logger.warning(f"发现重复实体名称 '{entity_name}'，跳过重复项")
+                    logger.warning(f"发现重复实体名称 '{entity_name}'，跳过重复项")
             
             return unique_entities
             
@@ -430,22 +506,107 @@ class LLMClient:
             return self._extract_entities_from_text_fallback(response)
     
     def _validate_entity_naming(self, entity_name: str, english_name: str) -> bool:
-        """验证实体命名规则"""
-        # 检查中文名称是否包含空格
-        if ' ' in entity_name:
-            self.logger.warning(f"实体名称 '{entity_name}' 包含空格，跳过")
+        """增强的实体命名验证规则，专门解决属性字段被误识别为实体的问题"""
+        
+        # 1. 检查是否为属性字段模式（最严格的过滤）
+        property_field_patterns = [
+            r'^name\s*\([^)]*\)$',  # name(名称)
+            r'^desc\s*\([^)]*\)$',  # desc(描述)
+            r'^description\s*\([^)]*\)$',  # description(描述)
+            r'^english_name\s*\([^)]*\)$',  # english_name(英文名称)
+            r'^type\s*\([^)]*\)$',  # type(类型)
+            r'^constraint\s*\([^)]*\)$',  # constraint(约束)
+            r'^target\s*\([^)]*\)$',  # target(目标)
+            r'^.*\s*\([^)]*\)$'  # 任何包含括号的格式
+        ]
+        
+        for pattern in property_field_patterns:
+            if re.match(pattern, entity_name.strip(), re.IGNORECASE):
+                logger.warning(f"过滤属性字段: {entity_name}")
+                return False
+        
+        # 2. 检查是否为关系字段模式
+        relation_field_patterns = [
+            r'^.*By\s*\([^)]*\)$',  # triggeredBy(由...引发)
+            r'^.*To\s*\([^)]*\)$',  # appliedTo(应用于)
+            r'^.*In\s*\([^)]*\)$',  # usedIn(使用于)
+            r'^.*With\s*\([^)]*\)$',  # coordinatedWith(与...协调)
+            r'^includes.*\s*\([^)]*\)$',  # includesStep(包含步骤)
+            r'^uses.*\s*\([^)]*\)$',  # usesMaterial(使用材料)
+            r'^has.*\s*\([^)]*\)$',  # hasResponseMeasure(具有应急处置措施)
+            r'^follows.*\s*\([^)]*\)$',  # followsPrinciple(遵循原则)
+            r'^comprises.*\s*\([^)]*\)$'  # comprisesElement(包含要素)
+        ]
+        
+        for pattern in relation_field_patterns:
+            if re.match(pattern, entity_name.strip(), re.IGNORECASE):
+                logger.warning(f"过滤关系字段: {entity_name}")
+                return False
+        
+        # 3. 检查是否为明显的非实体概念
+        non_entity_patterns = [
+            r'^[a-zA-Z]+\s*\([^)]*\)$',  # 英文单词+括号格式
+            r'^\w{1,10}\s*\([^)]*\)$',  # 短单词+括号格式
+        ]
+        
+        for pattern in non_entity_patterns:
+            if re.match(pattern, entity_name.strip(), re.IGNORECASE):
+                logger.warning(f"过滤非实体概念: {entity_name}")
+                return False
+        
+        # 4. 检查中文名称是否包含空格或特殊字符
+        if ' ' in entity_name or re.search(r'[^\w\u4e00-\u9fff\-]', entity_name):
+            logger.warning(f"实体名称包含无效字符: {entity_name}")
             return False
         
-        # 检查英文名称格式和长度
+        # 5. 检查英文名称格式
         if english_name:
-            # 检查英文名称是否符合正则表达式 ^[A-Z][a-zA-Z0-9]*
             if not re.match(r'^[A-Z][a-zA-Z0-9]*$', english_name):
-                self.logger.warning(f"英文名称 '{english_name}' 不符合格式要求（必须以大写字母开头，只能包含字母和数字），跳过")
+                logger.warning(f"英文名称格式错误: {english_name}")
                 return False
             
-            # 检查英文名称长度是否超过50个字符
             if len(english_name) > 50:
-                self.logger.warning(f"英文名称 '{english_name}' 长度超过50个字符，跳过")
+                logger.warning(f"英文名称过长: {english_name}")
+                return False
+        
+        # 6. 检查已知的错误映射
+        known_error_mappings = {
+            "文明施工管理目标": "ReflectiveVest",
+            "隧道火灾": "WeakBlasting",
+            "name(名称)": "FrequentMonitoring",
+            "desc(描述)": "StrongSupport",
+            "name名称": "Name",
+            "desc描述": "Description"
+        }
+        
+        if entity_name in known_error_mappings and english_name == known_error_mappings[entity_name]:
+            logger.warning(f"过滤已知错误映射: {entity_name} -> {english_name}")
+            return False
+        
+        # 7. 检查实体名称长度（过短或过长都可能有问题）
+        if len(entity_name.strip()) < 2:
+            logger.warning(f"实体名称过短: {entity_name}")
+            return False
+        
+        if len(entity_name.strip()) > 30:
+            logger.warning(f"实体名称过长: {entity_name}")
+            return False
+        
+        # 检查实体名称与英文名称的一致性
+        # 如果中文名称是专业术语，英文名称应该相关
+        inconsistent_mappings = [
+            ('文明施工管理目标', 'ReflectiveVest'),
+            ('施工告示牌', 'DustMask'),
+            ('混凝土', 'SafetyHelmet'),
+            ('钢筋', 'SafetyGloves'),
+            ('隧道火灾', 'WeakBlasting'),  # 新增：隧道火灾不应该映射为弱爆破
+            ('name(名称)', 'FrequentMonitoring'),  # 新增：属性字段错误映射
+            ('desc(描述)', 'StrongSupport')  # 新增：属性字段错误映射
+        ]
+        
+        for chinese, english in inconsistent_mappings:
+            if entity_name == chinese and english_name == english:
+                self.logger.warning(f"发现明显错误的实体映射: '{entity_name}' -> '{english_name}'，跳过")
                 return False
         
         return True
