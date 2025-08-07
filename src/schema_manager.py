@@ -362,13 +362,8 @@ class SchemaManager:
                 'type': 'Text'
             }
         
-        # 只有在没有任何自定义属性时才添加semanticType
-        if not has_semantic_type and not custom_properties:
-            properties['semanticType'] = {
-                'name': 'semanticType(语义类型)',
-                'type': 'Text',
-                'index': 'Text'
-            }
+        # 不再自动添加semanticType属性，因为这不是标准属性
+        # semanticType和index应该由用户明确指定，而不是自动添加
         
         # 添加自定义属性
         if custom_properties:

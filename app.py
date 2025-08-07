@@ -70,7 +70,7 @@ def main():
         
         # 文档处理配置
         st.subheader("文档处理设置")
-        chunk_size = st.slider("文档分块大小", 500, 3000, 1500)
+        chunk_size = st.slider("文档分块大小", 500, 3000, 2000)
         chunk_overlap = st.slider("分块重叠大小", 50, 500, 200)
         
         # Schema 配置

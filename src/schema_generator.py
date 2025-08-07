@@ -48,12 +48,8 @@ class SchemaGenerator:
             'name': {
                 'name': 'name(名称)',
                 'type': 'Text'
-            },
-            'semanticType': {
-                'name': 'semanticType(语义类型)',
-                'type': 'Text',
-                'index': 'Text'
             }
+            # 移除semanticType属性，因为这不是必需的标准属性
         }
     
     def extract_entities_from_chunk(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
