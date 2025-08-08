@@ -114,6 +114,215 @@ class SchemaManager:
         
         return False
     
+    def merge_and_remove_duplicate_entities(self) -> Dict[str, Any]:
+        """自动识别并删除重复实体，删除前合并properties和relations"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        result = {
+            'merged_entities': [],
+            'removed_entities': [],
+            'total_removed': 0
+        }
+        
+        # 构建实体相似性映射
+        entity_groups = self._group_similar_entities()
+        
+        for group in entity_groups:
+            if len(group) > 1:
+                # 选择主实体（通常是名称最短或最标准的）
+                primary_entity = self._select_primary_entity(group)
+                duplicates = [e for e in group if e != primary_entity]
+                
+                logger.info(f"发现重复实体组，主实体: {primary_entity}, 重复实体: {[e for e in duplicates]}")
+                
+                # 合并properties和relations到主实体
+                merged_properties, merged_relations = self._merge_entity_data(primary_entity, duplicates)
+                
+                # 更新主实体
+                if primary_entity in self.entities:
+                    self.entities[primary_entity]['properties'].update(merged_properties)
+                    self.entities[primary_entity]['relations'].update(merged_relations)
+                    self.entities[primary_entity]['last_modified'] = datetime.now().isoformat()
+                
+                # 删除重复实体
+                for duplicate in duplicates:
+                    if duplicate in self.entities:
+                        old_entity = self.entities[duplicate].copy()
+                        del self.entities[duplicate]
+                        
+                        # 记录删除
+                        self._record_modification('deleted', duplicate, old_entity, None)
+                        result['removed_entities'].append(duplicate)
+                        result['total_removed'] += 1
+                        
+                        logger.info(f"删除重复实体: {duplicate}")
+                
+                result['merged_entities'].append({
+                    'primary': primary_entity,
+                    'merged_from': duplicates,
+                    'merged_properties_count': len(merged_properties),
+                    'merged_relations_count': len(merged_relations)
+                })
+        
+        logger.info(f"重复实体清理完成，删除了 {result['total_removed']} 个重复实体")
+        return result
+    
+    def _group_similar_entities(self) -> List[List[str]]:
+        """将相似的实体分组"""
+        groups = []
+        processed = set()
+        
+        for entity_name in self.entities.keys():
+            if entity_name in processed:
+                continue
+                
+            similar_group = [entity_name]
+            processed.add(entity_name)
+            
+            # 查找相似实体
+            for other_name in self.entities.keys():
+                if other_name != entity_name and other_name not in processed:
+                    if self._are_entities_similar(entity_name, other_name):
+                        similar_group.append(other_name)
+                        processed.add(other_name)
+            
+            if len(similar_group) > 1:
+                groups.append(similar_group)
+        
+        return groups
+    
+    def _are_entities_similar(self, entity1: str, entity2: str) -> bool:
+        """判断两个实体是否相似（可能是重复的）"""
+        e1 = self.entities.get(entity1, {})
+        e2 = self.entities.get(entity2, {})
+        
+        # 检查英文名称相似性
+        name1 = entity1.lower().replace('_', '').replace('-', '')
+        name2 = entity2.lower().replace('_', '').replace('-', '')
+        
+        # 完全相同的名称（忽略大小写和分隔符）
+        if name1 == name2:
+            return True
+        
+        # 检查中文名称是否相同
+        chinese1 = e1.get('chinese_name', '').strip()
+        chinese2 = e2.get('chinese_name', '').strip()
+        if chinese1 and chinese2 and chinese1 == chinese2:
+            return True
+        
+        # 检查一个是另一个的子串（可能是缩写）
+        if (len(name1) > 3 and len(name2) > 3 and 
+            (name1 in name2 or name2 in name1)):
+            return True
+        
+        # 检查描述相似性（简单的关键词匹配）
+        desc1 = e1.get('description', '').lower()
+        desc2 = e2.get('description', '').lower()
+        if desc1 and desc2 and len(desc1) > 10 and len(desc2) > 10:
+            # 计算描述的相似度（简单的词汇重叠）
+            words1 = set(desc1.split())
+            words2 = set(desc2.split())
+            if len(words1) > 0 and len(words2) > 0:
+                overlap = len(words1.intersection(words2))
+                total = len(words1.union(words2))
+                similarity = overlap / total if total > 0 else 0
+                if similarity > 0.7:  # 70%的词汇重叠
+                    return True
+        
+        return False
+    
+    def _select_primary_entity(self, entity_group: List[str]) -> str:
+        """从实体组中选择主实体（保留的实体）"""
+        # 优先选择名称最短且最标准的实体
+        # 标准性判断：包含完整单词、没有特殊字符、有完整描述等
+        
+        scored_entities = []
+        
+        for entity_name in entity_group:
+            entity = self.entities.get(entity_name, {})
+            score = 0
+            
+            # 名称长度评分（较短的名称通常更标准）
+            score += max(0, 50 - len(entity_name))
+            
+            # 描述完整性评分
+            desc = entity.get('description', '')
+            if len(desc) > 20:
+                score += 20
+            elif len(desc) > 10:
+                score += 10
+            
+            # 中文名称存在性评分
+            if entity.get('chinese_name'):
+                score += 15
+            
+            # 属性数量评分
+            props_count = len(entity.get('properties', {}))
+            score += min(props_count * 5, 25)
+            
+            # 关系数量评分
+            relations_count = len(entity.get('relations', {}))
+            score += min(relations_count * 3, 15)
+            
+            # 名称标准性评分（驼峰命名、无特殊字符）
+            if entity_name.replace('_', '').replace('-', '').isalnum():
+                score += 10
+            
+            scored_entities.append((entity_name, score))
+        
+        # 返回得分最高的实体
+        scored_entities.sort(key=lambda x: x[1], reverse=True)
+        return scored_entities[0][0]
+    
+    def _merge_entity_data(self, primary_entity: str, duplicate_entities: List[str]) -> tuple:
+        """合并重复实体的properties和relations到主实体"""
+        merged_properties = {}
+        merged_relations = {}
+        
+        # 收集所有重复实体的数据
+        all_entities = [primary_entity] + duplicate_entities
+        
+        for entity_name in all_entities:
+            entity = self.entities.get(entity_name, {})
+            
+            # 合并properties
+            entity_props = entity.get('properties', {})
+            for prop_key, prop_value in entity_props.items():
+                if prop_key not in merged_properties:
+                    merged_properties[prop_key] = prop_value
+                else:
+                    # 如果属性已存在，保留更完整的定义
+                    existing = merged_properties[prop_key]
+                    if isinstance(prop_value, dict) and isinstance(existing, dict):
+                        # 合并字典类型的属性定义
+                        for k, v in prop_value.items():
+                            if k not in existing or not existing[k]:
+                                existing[k] = v
+            
+            # 合并relations
+            entity_relations = entity.get('relations', {})
+            for rel_key, rel_value in entity_relations.items():
+                if rel_key not in merged_relations:
+                    merged_relations[rel_key] = rel_value
+                else:
+                    # 如果关系已存在，保留更完整的定义
+                    existing = merged_relations[rel_key]
+                    if isinstance(rel_value, dict) and isinstance(existing, dict):
+                        for k, v in rel_value.items():
+                            if k not in existing or not existing[k]:
+                                existing[k] = v
+        
+        # 移除主实体原有的properties和relations（避免重复计算）
+        primary_props = self.entities.get(primary_entity, {}).get('properties', {})
+        primary_relations = self.entities.get(primary_entity, {}).get('relations', {})
+        
+        # 只返回新增的properties和relations
+        new_properties = {k: v for k, v in merged_properties.items() if k not in primary_props}
+        new_relations = {k: v for k, v in merged_relations.items() if k not in primary_relations}
+        
+        return new_properties, new_relations
+    
     def get_entity(self, entity_name: str) -> Optional[Dict[str, Any]]:
         """获取指定实体"""
         return self.entities.get(entity_name)

@@ -231,12 +231,21 @@ def main():
                     with col_r2:
                         st.metric("修改实体", result['stats']['modified_entities'])
                     with col_r3:
-                        st.metric("建议删除", len(result['stats']['suggested_deletions']))
+                        st.metric("删除重复", result['stats']['merge_result']['total_removed'])
                     
-                    if result['stats']['suggested_deletions']:
-                        st.subheader("建议删除的实体:")
-                        for deletion in result['stats']['suggested_deletions']:
-                            st.warning(f"**{deletion['entity']}**: {deletion['reason']}")
+                    if result['stats']['merge_result']['total_removed'] > 0:
+                        st.subheader("重复实体处理结果:")
+                        st.success(f"✅ 成功删除了 {result['stats']['merge_result']['total_removed']} 个重复实体")
+                        
+                        # 显示合并详情
+                        if result['stats']['merge_result']['merged_entities']:
+                            with st.expander("查看合并详情"):
+                                for merge_info in result['stats']['merge_result']['merged_entities']:
+                                    st.write(f"**主实体**: {merge_info['primary']}")
+                                    st.write(f"**合并来源**: {', '.join(merge_info['merged_from'])}")
+                                    st.write(f"**合并属性数**: {merge_info['merged_properties_count']}")
+                                    st.write(f"**合并关系数**: {merge_info['merged_relations_count']}")
+                                    st.markdown("---")
         
         # Schema 预览和下载
         st.markdown("---")
@@ -392,13 +401,10 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 overall_progress = (i + chunk_progress) / len(uploaded_files)
                 progress_bar.progress(overall_progress)
             
-            # 检查建议删除的实体
-            logger.debug("检查建议删除的实体")
-            suggested_deletions = schema_generator.suggest_entity_deletions(
-                st.session_state.schema_manager.get_all_entities(),
-                chunks
-            )
-            logger.info(f"建议删除 {len(suggested_deletions)} 个实体")
+            # 自动合并并删除重复实体
+            logger.debug("开始自动合并并删除重复实体")
+            merge_result = st.session_state.schema_manager.merge_and_remove_duplicate_entities()
+            logger.info(f"重复实体处理完成 - 删除: {merge_result['total_removed']} 个, 合并组: {len(merge_result['merged_entities'])} 个")
             
             # 记录处理结果
             result = {
@@ -407,12 +413,12 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 'stats': {
                     'new_entities': new_entities,
                     'modified_entities': modified_entities,
-                    'suggested_deletions': suggested_deletions
+                    'merge_result': merge_result
                 }
             }
             
             st.session_state.processing_results.append(result)
-            logger.success(f"文件 {uploaded_file.name} 处理完成 - 新增: {new_entities}, 修改: {modified_entities}, 建议删除: {len(suggested_deletions)}")
+            logger.success(f"文件 {uploaded_file.name} 处理完成 - 新增: {new_entities}, 修改: {modified_entities}, 删除重复: {merge_result['total_removed']}")
             
             # 清理临时文件
             logger.debug(f"清理临时文件: {temp_path}")
