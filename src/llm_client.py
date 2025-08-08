@@ -355,7 +355,7 @@ class LLMClient:
             {
                 "role": "user",
                 "content": f"""
-你是一个专业的OpenSPG知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下{'工程设计' if not self.domain_expertise else self.domain_expertise}文档文本中提取实体信息，并按照OpenSPG声明式Schema脚本的标准格式组织。
+你是一个专业的OpenSPG知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下{'工程设计' if not self.domain_expertise else self.domain_expertise}文档文本中提取{f'与{self.domain_expertise}领域相关的' if self.domain_expertise else ''}实体信息，并按照OpenSPG声明式Schema脚本的标准格式组织。
 
 文档文本：
 {text}
@@ -417,7 +417,7 @@ TypeB(实体类型B): EntityType
 - description: 实体描述
 - entity_type: OpenSPG实体类型（EntityType/ConceptType/EventType）
 - properties: 相关属性（符合OpenSPG属性定义标准）
-- relations: 与其他实体的关系（符合OpenSPG关系定义标准）
+- relations: 与其他实体的关系（符合OpenSPG关系定义标准），其他实体未定义，需要创建其他实体的定义，防止关系不成立
 
 
 所有识别的实体返回结果必须要包含在一个 json 块中：
@@ -442,6 +442,7 @@ TypeB(实体类型B): EntityType
             "relationName": {{
                 "name": "relationName(关系中文名)",
                 "target": "目标实体英文名称",
+                “target_chinese_name": "目标实体中文名称"
             }}
         }}
     }}

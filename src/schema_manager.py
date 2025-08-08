@@ -73,20 +73,28 @@ class SchemaManager:
         
         else:
             # 创建新实体
-            # 处理属性 - 如果传入的properties已经是完整的属性定义，直接使用；否则标准化
-            if properties and any(isinstance(v, dict) and 'name' in v for v in properties.values()):
-                # 传入的是完整的属性定义，直接使用
-                final_properties = properties
+            # 确定OpenSPG类型
+            final_openspg_type = openspg_type or entity_type or 'EntityType'
+            
+            # 处理属性 - ConceptType使用简化格式，不添加标准属性
+            if final_openspg_type == 'ConceptType':
+                # ConceptType使用简化格式，只保留传入的自定义属性（如果有）
+                final_properties = properties or {}
             else:
-                # 传入的是简单属性，需要标准化
-                final_properties = self._build_standard_properties(properties)
+                # EntityType和EventType需要标准化属性
+                if properties and any(isinstance(v, dict) and 'name' in v for v in properties.values()):
+                    # 传入的是完整的属性定义，直接使用
+                    final_properties = properties
+                else:
+                    # 传入的是简单属性，需要标准化
+                    final_properties = self._build_standard_properties(properties)
             
             new_entity = {
                 'name': entity_name,
                 'chinese_name': chinese_name or entity_name,
                 'description': description,
                 'type': entity_type or self._determine_entity_type(entity_name, description),
-                'openspg_type': openspg_type or 'EntityType',  # OpenSPG标准类型
+                'openspg_type': final_openspg_type,  # OpenSPG标准类型
                 'properties': final_properties,
                 'relations': relations,
                 'created': datetime.now().isoformat(),
@@ -385,7 +393,13 @@ class SchemaManager:
         entity_line = f"{entity['name']}({entity['chinese_name']}): {openspg_type}"
         lines.append(entity_line)
         
-        # 属性部分（符合OpenSPG标准）
+        # 为ConceptType添加hypernymPredicate并使用简化格式
+        if openspg_type == 'ConceptType':
+            lines.append("\thypernymPredicate: isA")
+            # ConceptType使用简化格式，不包含properties和relations
+            return '\n'.join(lines)
+        
+        # 属性部分（符合OpenSPG标准）- 仅对EntityType和EventType
         properties = entity.get('properties', {})
         if properties:
             lines.append("\tproperties:")
@@ -426,7 +440,7 @@ class SchemaManager:
                         index_line = f"\t\t\tindex: {prop_def['index']}"
                         lines.append(index_line)
         
-        # 关系部分（符合OpenSPG标准）
+        # 关系部分（符合OpenSPG标准）- 仅对EntityType和EventType
         relations = entity.get('relations', {})
         if relations:
             lines.append("\trelations:")
