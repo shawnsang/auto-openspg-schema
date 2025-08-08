@@ -143,9 +143,10 @@ class SchemaGenerator:
         """标准化实体格式（符合OpenSPG标准）"""
         try:
             # 获取基本信息
-            entity_name = entity.get('name', '').strip()
+            entity_name = entity.get('english_name', entity.get('name', '')).strip()
             chinese_name = entity.get('chinese_name', '').strip()
             description = entity.get('description', '').strip()
+            entity_type = entity.get('entity_type', 'EntityType').strip()
             
             # 如果name字段包含中文名称（格式：englishName(中文名)），则提取分离
             if not chinese_name and '(' in entity_name and ')' in entity_name:
@@ -171,13 +172,17 @@ class SchemaGenerator:
                 logger.info(f"修复实体英文名称: {entity_name} -> {fixed_english_name}")
                 entity_name = fixed_english_name
             
+            # 根据entity_type设置openspg_type
+            openspg_type = self._map_entity_type_to_openspg(entity_type)
+            
             # 构建标准化实体
             standardized_entity = {
                 'name': entity_name,
                 'chinese_name': chinese_name,
                 'english_name': entity_name,  # 保持向后兼容
                 'description': description,
-                'openspg_type': entity.get('openspg_type', 'EntityType'),
+                'entity_type': entity_type,  # 新增：保存原始entity_type
+                'openspg_type': openspg_type,
                 'traditional_type': entity.get('type', '实体'),
                 'category': entity.get('category', '其他'),  # 向后兼容
                 'type': entity.get('type', '实体'),  # 向后兼容
@@ -251,6 +256,19 @@ class SchemaGenerator:
         
         # 默认类型
         return 'Others'
+    
+    def _map_entity_type_to_openspg(self, entity_type: str) -> str:
+        """将LLM返回的entity_type映射到OpenSPG类型"""
+        entity_type_mapping = {
+            'ConceptType': 'ConceptType',
+            'EntityType': 'EntityType', 
+            'EventType': 'EventType'
+        }
+        
+        openspg_type = entity_type_mapping.get(entity_type, 'EntityType')
+        logger.debug(f"实体类型映射: {entity_type} -> {openspg_type}")
+        
+        return openspg_type
     
     def _build_entity_properties(self, entity: Dict[str, Any]) -> Dict[str, Any]:
         """构建实体属性（符合OpenSPG标准）"""
@@ -503,6 +521,7 @@ class SchemaGenerator:
         
         # 实体定义行（使用OpenSPG类型）
         openspg_type = entity.get('openspg_type', 'EntityType')
+        entity_type = entity.get('entity_type', 'EntityType')
         entity_line = f"{entity['name']}({entity['chinese_name']}): {openspg_type}"
         lines.append(entity_line)
         
@@ -510,65 +529,76 @@ class SchemaGenerator:
         if entity.get('description'):
             lines.append(f"    desc: {entity['description']}")
         
-        # 属性部分（必须包含标准属性）
+        # 根据entity_type处理不同的格式
+        if entity_type == 'ConceptType':
+            # ConceptType使用简化格式，不需要properties和relations
+            return '\n'.join(lines)
+        
+        # 对于EntityType和EventType，处理属性和关系
         properties = entity.get('properties', {})
         
-        # 确保包含标准属性
-        standard_props = {}
-        
-        # 检查是否已有desc属性
-        has_desc = any('desc' in key.lower() or 'description' in key.lower() for key in properties.keys())
-        if not has_desc:
-            standard_props['desc'] = {
-                'name': 'desc(描述)',
-                'type': 'Text',
-                'constraint': 'NotNull'
-            }
-        
-        # 检查是否已有name属性
-        has_name = any('name' in key.lower() and 'chinese' not in key.lower() for key in properties.keys())
-        if not has_name:
-            standard_props['name'] = {
-                'name': 'name(名称)',
-                'type': 'Text',
-                'constraint': 'NotNull'
-            }
-        
-        # 合并标准属性和自定义属性
-        all_properties = {**standard_props, **properties}
+        # 处理EventType的特殊情况：subject属性
+        if entity_type == 'EventType':
+            # 对于EventType，直接使用LLM返回的properties，不添加标准属性
+            all_properties = properties
+        else:
+            # 对于EntityType，确保包含标准属性
+            standard_props = {}
+            
+            # 检查是否已有desc属性
+            has_desc = any('desc' in key.lower() or 'description' in key.lower() for key in properties.keys())
+            if not has_desc:
+                standard_props['desc'] = {
+                    'name': 'desc(描述)',
+                    'type': 'Text',
+                    'constraint': 'NotNull'
+                }
+            
+            # 检查是否已有name属性
+            has_name = any('name' in key.lower() and 'chinese' not in key.lower() for key in properties.keys())
+            if not has_name:
+                standard_props['name'] = {
+                    'name': 'name(名称)',
+                    'type': 'Text',
+                    'constraint': 'NotNull'
+                }
+            
+            # 合并标准属性和自定义属性
+            all_properties = {**standard_props, **properties}
         
         if all_properties:
             lines.append("    properties:")
             
             for prop_key, prop_def in all_properties.items():
-                # 属性名称和类型（第三层缩进）
-                prop_name = prop_def.get('name', f"{prop_key}({prop_def.get('chinese_name', prop_key)})")
-                prop_line = f"        {prop_name}: {prop_def['type']}"
+                # 处理EventType的subject属性特殊格式
+                if entity_type == 'EventType' and prop_key == 'subject':
+                    # subject属性直接使用target值作为类型
+                    target_type = prop_def.get('target', prop_def.get('type', 'Text'))
+                    prop_line = f"        subject: {target_type}"
+                    lines.append(prop_line)
+                    continue
+                
+                # 普通属性处理
+                if isinstance(prop_def, dict):
+                    prop_name = prop_def.get('name', f"{prop_key}({prop_def.get('chinese_name', prop_key)})")
+                    prop_type = prop_def.get('type', 'Text')
+                else:
+                    prop_name = f"{prop_key}"
+                    prop_type = str(prop_def)
+                
+                prop_line = f"        {prop_name}: {prop_type}"
                 lines.append(prop_line)
                 
                 # 属性描述（第四层缩进）
-                if prop_def.get('description'):
+                if isinstance(prop_def, dict) and prop_def.get('description'):
                     lines.append(f"            desc: {prop_def['description']}")
                 
                 # 添加约束条件（第四层缩进）
-                if 'constraint' in prop_def and prop_def['constraint']:
+                if isinstance(prop_def, dict) and 'constraint' in prop_def and prop_def['constraint']:
                     lines.append(f"            constraint: {prop_def['constraint']}")
-                
-                # 子属性（第五层缩进）
-                if prop_def.get('properties'):
-                    lines.append("            properties:")
-                    for sub_prop_key, sub_prop_def in prop_def['properties'].items():
-                        sub_prop_line = f"                {sub_prop_key}({sub_prop_def.get('chinese_name', sub_prop_key)}): {sub_prop_def['type']}"
-                        lines.append(sub_prop_line)
-                        
-                        # 子属性描述和约束（第六层缩进）
-                        if sub_prop_def.get('description'):
-                            lines.append(f"                    desc: {sub_prop_def['description']}")
-                        if sub_prop_def.get('constraint'):
-                            lines.append(f"                    constraint: {sub_prop_def['constraint']}")
         
-        # 关系部分（可选）
-        if entity.get('relations'):
+        # 关系部分（可选，ConceptType不处理关系）
+        if entity_type != 'ConceptType' and entity.get('relations'):
             lines.append("    relations:")
             
             for relation_key, relation_def in entity['relations'].items():
@@ -580,24 +610,6 @@ class SchemaGenerator:
                 # 关系描述（第四层缩进）
                 if relation_def.get('description'):
                     lines.append(f"            desc: {relation_def['description']}")
-                
-                # 关系属性（第四层缩进）
-                if relation_def.get('properties'):
-                    lines.append("            properties:")
-                    for rel_prop_key, rel_prop_def in relation_def['properties'].items():
-                        rel_prop_name = rel_prop_def.get('name', f"{rel_prop_key}({rel_prop_def.get('chinese_name', rel_prop_key)})")
-                        rel_prop_line = f"                {rel_prop_name}: {rel_prop_def['type']}"
-                        lines.append(rel_prop_line)
-                        
-                        # 关系属性描述和约束（第六层缩进）
-                        if rel_prop_def.get('description'):
-                            lines.append(f"                    desc: {rel_prop_def['description']}")
-                        if rel_prop_def.get('constraint'):
-                            lines.append(f"                    constraint: {rel_prop_def['constraint']}")
-                
-                # 关系约束条件（第四层缩进）
-                if 'constraint' in relation_def and relation_def['constraint']:
-                    lines.append(f"            constraint: {relation_def['constraint']}")
         
         return '\n'.join(lines)
     

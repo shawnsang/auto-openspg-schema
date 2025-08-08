@@ -223,10 +223,62 @@ class LLMClient:
             entities = self._parse_entity_response(response)
             logger.success(f"实体提取完成，共提取到 {len(entities)} 个实体")
             
-            # 记录提取到的实体名称
+            # 详细记录提取到的实体列表
             if entities:
                 entity_names = [entity.get('name', 'Unknown') for entity in entities]
                 logger.info(f"提取到的实体: {', '.join(entity_names)}")
+                
+                # 记录完整的实体详细信息
+                logger.info("=== 实体详细信息列表 ===")
+                for i, entity in enumerate(entities, 1):
+                    logger.info(f"实体 {i}:")
+                    logger.info(f"  名称: {entity.get('name', 'N/A')}")
+                    logger.info(f"  英文名: {entity.get('english_name', 'N/A')}")
+                    logger.info(f"  中文名: {entity.get('chinese_name', 'N/A')}")
+                    logger.info(f"  类型: {entity.get('entity_type', 'N/A')}")
+                    logger.info(f"  描述: {entity.get('description', 'N/A')}")
+                    logger.info(f"  分类: {entity.get('category', 'N/A')}")
+                    
+                    # 记录属性信息
+                    properties = entity.get('properties', {})
+                    if properties:
+                        logger.info(f"  属性数量: {len(properties)}")
+                        for prop_name, prop_info in properties.items():
+                            if isinstance(prop_info, dict):
+                                prop_type = prop_info.get('type', 'N/A')
+                                prop_display_name = prop_info.get('name', prop_name)
+                                logger.info(f"    - {prop_name}: {prop_display_name} ({prop_type})")
+                            else:
+                                logger.info(f"    - {prop_name}: {prop_info}")
+                    else:
+                        logger.info(f"  属性数量: 0")
+                    
+                    # 记录关系信息
+                    relations = entity.get('relations', {})
+                    if relations:
+                        logger.info(f"  关系数量: {len(relations)}")
+                        for rel_name, rel_info in relations.items():
+                            if isinstance(rel_info, dict):
+                                rel_target = rel_info.get('target', 'N/A')
+                                rel_display_name = rel_info.get('name', rel_name)
+                                logger.info(f"    - {rel_name}: {rel_display_name} -> {rel_target}")
+                            else:
+                                logger.info(f"    - {rel_name}: {rel_info}")
+                    else:
+                        logger.info(f"  关系数量: 0")
+                    
+                    logger.info("  ---")
+                
+                logger.info("=== 实体列表记录完成 ===")
+                
+                # 记录JSON格式的完整实体数据（便于程序化处理）
+                try:
+                    entities_json = json.dumps(entities, ensure_ascii=False, indent=2)
+                    logger.debug(f"完整实体JSON数据:\n{entities_json}")
+                except Exception as e:
+                    logger.warning(f"无法序列化实体数据为JSON: {e}")
+            else:
+                logger.warning("未提取到任何实体")
             
             return entities
         except Exception as e:
@@ -367,20 +419,15 @@ TypeB(实体类型B): EntityType
 - properties: 相关属性（符合OpenSPG属性定义标准）
 - relations: 与其他实体的关系（符合OpenSPG关系定义标准）
 
-请以JSON格式返回结果：
 
-**对于ConceptType实体，使用简化格式：**
-[
-    {{
+所有识别的实体返回结果必须要包含在一个 json 块中：
+{{
+    "ConceptEnglishName":{{
         "english_name": "ConceptEnglishName",
         "chinese_name": "概念中文名称",
         "entity_type": "ConceptType"
     }}
-]
-
-**对于EntityType实体，使用完整格式：**
-[
-    {{
+    "EntityEnglishName":{{
         "english_name": "EntityEnglishName",
         "chinese_name": "实体中文名称",
         "description": "实体中文描述",
@@ -398,11 +445,7 @@ TypeB(实体类型B): EntityType
             }}
         }}
     }}
-]
-
-**对于EventType实体，必须定义主体subject：**
-[
-    {{
+    "EventEnglishName":{{
         "english_name": "EventEnglishName",
         "chinese_name": "事件中文名称",
         "description": "事件中文描述",
@@ -413,7 +456,7 @@ TypeB(实体类型B): EntityType
             }},
         }},
     }}
-]
+}}
 
 ## 重要注意事项
 
@@ -460,25 +503,48 @@ TypeB(实体类型B): EntityType
             if cleaned_response.endswith('```'):
                 cleaned_response = cleaned_response[:-3]  # 移除结尾的 ```
             cleaned_response = cleaned_response.strip()
-            
+          
             # 尝试直接解析 JSON
-            entities = json.loads(cleaned_response)
+            logger.info(f"开始解析JSON内容: {cleaned_response}")
+            try:
+                entities = json.loads(cleaned_response)
+                logger.info(f"JSON解析成功，实体数量: {len(entities) if isinstance(entities, list) else 1}")
+            except json.JSONDecodeError as json_error:
+                logger.error(f"JSON解析失败: {str(json_error)}")
+                logger.error(f"解析失败的JSON内容: {cleaned_response}")
+                raise json.JSONDecodeError(f"无法解析LLM返回的JSON格式: {str(json_error)}", cleaned_response, json_error.pos)
             
-            # 如果是单个实体对象，转换为列表
+            # 处理不同的JSON格式
             if isinstance(entities, dict):
-                entities = [entities]
+                # 检查是否是包含多个实体的字典（每个key是实体名，value是实体信息）
+                if all(isinstance(v, dict) and ('english_name' in v or 'chinese_name' in v) for v in entities.values()):
+                    # 将字典中的每个实体转换为列表
+                    entities = list(entities.values())
+                    logger.info(f"检测到实体字典格式，转换为列表，包含 {len(entities)} 个实体")
+                else:
+                    # 单个实体对象，转换为列表
+                    entities = [entities]
             elif not isinstance(entities, list):
                 return []
             
             # 验证和标准化实体格式
             standardized_entities = []
             for entity in entities:
-                if isinstance(entity, dict) and 'name' in entity:
-                    # 直接使用原始名称，不进行清理（LLM提示词已约束格式）
-                    entity_name = entity.get('name', '').strip()
-                    
-                    # 获取英文名称
+                if isinstance(entity, dict):
+                    # 获取英文名称和中文名称
                     english_name = entity.get('english_name', '').strip()
+                    chinese_name = entity.get('chinese_name', '').strip()
+                    
+                    # 如果有english_name，优先使用english_name作为name
+                    # 否则使用原有的name字段
+                    if english_name:
+                        entity_name = english_name
+                    else:
+                        entity_name = entity.get('name', '').strip()
+                    
+                    # 必须有实体名称才能继续处理
+                    if not entity_name:
+                        continue
                     
                     # 验证命名规则
                     if not self._validate_entity_naming(entity_name, english_name):
@@ -487,11 +553,15 @@ TypeB(实体类型B): EntityType
                     standardized_entity = {
                         'name': entity_name,
                         'english_name': english_name,
-                        'chinese_name': entity.get('chinese_name', '').strip(),
+                        'chinese_name': chinese_name,
                         'description': entity.get('description', '').strip(),
                         'category': entity.get('category', 'Others').strip(),
                         'properties': entity.get('properties', {})
                     }
+                    
+                    # 添加entity_type信息（如果有）
+                    if 'entity_type' in entity:
+                        standardized_entity['entity_type'] = entity['entity_type']
                     
                     # 添加关系信息（如果有）
                     if 'relations' in entity:
