@@ -335,18 +335,10 @@ TypeA(实体类型A): EntityType
     desc: 实体类型描述
     properties:
         property1(属性1): Text
-            desc: 属性1的描述
-            constraint: NotNull, MultiValue
         property2(属性2): Float
-            desc: 属性2的描述
-            constraint: NotNull
     relations:
         relation1(关系1): TypeB
-            desc: 关系1的描述
-            properties:
-                confidence(置信度): Float
-                    desc: 关系置信度
-                    constraint: NotNull
+        relation2(关系2): TypeC
 
 TypeB(实体类型B): EntityType
     desc: 实体类型B的描述
@@ -368,45 +360,58 @@ TypeB(实体类型B): EntityType
 11. 其他专业概念 (ConceptType)
 
 对于每个实体，请提供以下信息：
-- name: 实体英文名称（首字母大写，驼峰命名，只含字母数字）
-- chinese_name: 实体中文名称（简洁的标准术语）
+- name: 实体英文名称（首字母大写，驼峰命名，只含字母数字），依照实体中文名称转换为英文名称，如"隧道施工"转换为"TunnelConstruction"
+- chinese_name: 实体中文名称,必须从文档中提取（简洁的标准术语）
 - description: 实体描述
-- category: 实体类别（从上述类型中选择）
 - entity_type: OpenSPG实体类型（EntityType/ConceptType/EventType）
 - properties: 相关属性（符合OpenSPG属性定义标准）
 - relations: 与其他实体的关系（符合OpenSPG关系定义标准）
 
 请以JSON格式返回结果：
+
+**对于ConceptType实体，使用简化格式：**
 [
     {{
-        "name": "EntityEnglishName",
+        "english_name": "ConceptEnglishName",
+        "chinese_name": "概念中文名称",
+        "entity_type": "ConceptType"
+    }}
+]
+
+**对于EntityType实体，使用完整格式：**
+[
+    {{
+        "english_name": "EntityEnglishName",
         "chinese_name": "实体中文名称",
-        "description": "实体描述",
-        "category": "实体类别",
-        "entity_type": "EntityType|ConceptType|EventType",
+        "description": "实体中文描述",
+        "entity_type": "EntityType",
         "properties": {{
             "propertyName": {{
                 "name": "propertyName(属性中文名)",
                 "type": "Text|Float|Integer|STD.Date|STD.Email等",
-                "constraint": "NotNull|MultiValue|Enum等",
-                "description": "属性描述"
             }}
         }},
         "relations": {{
             "relationName": {{
                 "name": "relationName(关系中文名)",
                 "target": "目标实体英文名称",
-                "constraint": "NotNull|MultiValue",
-                "description": "关系描述",
-                "properties": {{
-                    "confidence": {{
-                        "name": "confidence(置信度)",
-                        "type": "Float",
-                        "constraint": "NotNull"
-                    }}
-                }}
             }}
         }}
+    }}
+]
+
+**对于EventType实体，必须定义主体subject：**
+[
+    {{
+        "english_name": "EventEnglishName",
+        "chinese_name": "事件中文名称",
+        "description": "事件中文描述",
+        "entity_type": "EventType",
+        "properties": {{
+            "subject": {{
+                "target": "事件的主体实体的英文名称",
+            }},
+        }},
     }}
 ]
 
@@ -417,21 +422,20 @@ TypeB(实体类型B): EntityType
    - 属性名称：首字母小写，如"materialType"、"constructionDate"
    - 避免使用拼音、数字开头、特殊字符
 
-2. **类型选择**：
-   - EntityType: 具体物理实体（设备、材料、人员、组织等）
-   - ConceptType: 抽象概念（术语、工艺、参数等）
-   - EventType: 事件和活动（施工、检测、验收等）
+2. **类型选择和输出格式**：
+   - EntityType: 具体物理实体（设备、材料、人员、组织等）- 使用完整格式
+   - ConceptType: 抽象概念（术语、工艺、参数等）- 使用简化格式，只需english_name、chinese_name和entity_type
+   - EventType: 事件和活动（施工、检测、验收等）- 使用完整格式，**必须定义主体subject属性**
 
 3. **属性类型**：
    - 优先使用基本类型：Text、Integer、Float
    - 特殊情况使用标准类型：STD.Date、STD.Email等
    - 关系属性只能使用基本类型
 
-4. **约束条件**：
-   - NotNull: 必填属性
-   - MultiValue: 可多值属性
-   - Enum: 枚举值，格式如Enum="A,B,C"
-   - Regular: 正则表达式，格式如Regular="^abc[0-9]+$"
+4. **EventType特殊要求**：
+   - EventType必须定义subject属性，指定事件的主体实体
+   - subject属性的type应该是具体的实体类型名称（如Company、Person、Equipment等）
+   - 示例：CompanyRiskEvent的subject为Company，表示公司风险事件的主体是公司
 
 5. **依赖顺序**：
    - 确保被引用的实体类型在引用它的实体之前定义
@@ -447,8 +451,18 @@ TypeB(实体类型B): EntityType
     def _parse_entity_response(self, response: str) -> List[Dict[str, Any]]:
         """解析 LLM 返回的实体信息"""
         try:
+            # 清理markdown代码块标记
+            cleaned_response = response.strip()
+            if cleaned_response.startswith('```json'):
+                cleaned_response = cleaned_response[7:]  # 移除 ```json
+            if cleaned_response.startswith('```'):
+                cleaned_response = cleaned_response[3:]   # 移除 ```
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]  # 移除结尾的 ```
+            cleaned_response = cleaned_response.strip()
+            
             # 尝试直接解析 JSON
-            entities = json.loads(response)
+            entities = json.loads(cleaned_response)
             
             # 如果是单个实体对象，转换为列表
             if isinstance(entities, dict):
