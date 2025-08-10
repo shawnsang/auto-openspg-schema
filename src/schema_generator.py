@@ -52,15 +52,23 @@ class SchemaGenerator:
             # 移除semanticType属性，因为这不是必需的标准属性
         }
     
-    def extract_entities_from_chunk(self, chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """从文档块中提取实体"""
+    def extract_entities_from_chunk(self, chunk: Dict[str, Any], known_entities: List[str] = None) -> List[Dict[str, Any]]:
+        """从文档块中提取实体
+        
+        Args:
+            chunk: 文档块字典，包含content字段
+            known_entities: 已知实体的英文名称列表，用于减少重复创建
+        """
         chunk_content = chunk.get('content', '')
         logger.info(f"开始从文档块提取实体，内容长度: {len(chunk_content)} 字符")
+        if known_entities:
+            logger.info(f"传入已知实体数量: {len(known_entities)}")
+            logger.debug(f"已知实体列表: {', '.join(known_entities[:10])}{'...' if len(known_entities) > 10 else ''}")
         logger.debug(f"文档块内容预览: {chunk_content[:200]}{'...' if len(chunk_content) > 200 else ''}")
         
-        # 使用 LLM 提取实体
+        # 使用 LLM 提取实体（传递已知实体列表）
         logger.debug("调用 LLM 客户端提取原始实体")
-        raw_entities = self.llm_client.extract_entities_from_text(chunk_content)
+        raw_entities = self.llm_client.extract_entities_from_text(chunk_content, known_entities)
         logger.info(f"LLM 返回 {len(raw_entities)} 个原始实体")
         
         # 标准化实体格式
@@ -299,9 +307,10 @@ class SchemaGenerator:
                     if not chinese_name or chinese_name == prop_name_full:
                         chinese_name = prop_key
                     
-                    # 构建属性定义
+                    # 构建属性定义 - 使用key(name)格式，其中key是英文名，name是中文名
+                    chinese_name = prop_value.get('name', prop_key)  # LLM返回的name字段实际是中文名
                     prop_def = {
-                        'name': f'{standardized_key}({chinese_name})',
+                        'name': f'{prop_key}({chinese_name})',  # 格式：英文key(中文name)
                         'type': prop_type,
                         'chinese_name': chinese_name
                     }
@@ -439,9 +448,10 @@ class SchemaGenerator:
                     if not chinese_name or chinese_name == rel_name_full:
                         chinese_name = rel_key
                     
-                    # 构建关系定义
+                    # 构建关系定义 - 使用key(name)格式，其中key是英文名，name是中文名
+                    chinese_name = rel_value.get('name', rel_key)  # LLM返回的name字段实际是中文名
                     rel_def = {
-                        'name': f'{standardized_key}({chinese_name})',
+                        'name': f'{rel_key}({chinese_name})',  # 格式：英文key(中文name)
                         'target': target,
                         'chinese_name': chinese_name
                     }
@@ -472,8 +482,10 @@ class SchemaGenerator:
                                 if not rel_prop_chinese_name or rel_prop_chinese_name == rel_prop_name_full:
                                     rel_prop_chinese_name = rel_prop_key
                                 
+                                # 使用key(name)格式，其中key是英文名，name是中文名
+                                rel_prop_chinese_name = rel_prop_value.get('name', rel_prop_key)  # LLM返回的name字段实际是中文名
                                 rel_prop_def = {
-                                    'name': f'{rel_prop_standardized_key}({rel_prop_chinese_name})',
+                                    'name': f'{rel_prop_key}({rel_prop_chinese_name})',  # 格式：英文key(中文name)
                                     'type': rel_prop_type,
                                     'chinese_name': rel_prop_chinese_name
                                 }

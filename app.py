@@ -70,8 +70,8 @@ def main():
         
         # 文档处理配置
         st.subheader("文档处理设置")
-        chunk_size = st.slider("文档分块大小", 500, 3000, 1000)
-        chunk_overlap = st.slider("分块重叠大小", 50, 500, 100)
+        chunk_size = st.slider("文档分块大小", 200, 1000, 500)
+        chunk_overlap = st.slider("分块重叠大小", 20, 100, 50)
         
         # Schema 配置
         st.subheader("Schema 设置")
@@ -247,49 +247,58 @@ def main():
                                     st.write(f"**合并关系数**: {merge_info['merged_relations_count']}")
                                     st.markdown("---")
         
-        # Schema 预览和下载
+        # Schema 下载和管理
         st.markdown("---")
-        st.header("📋 Schema 预览")
+        st.header("📥 Schema 下载")
         
-        if 'schema_manager' in st.session_state:
+        if 'schema_manager' in st.session_state and st.session_state.schema_manager.entities:
             schema_content = st.session_state.schema_manager.generate_schema_string()
-            st.code(schema_content, language="text")
-        
-            st.subheader("操作")
             
-            # 复制按钮
-            if st.button("📋 复制 Schema"):
-                st.code(schema_content)
-                st.success("Schema 已显示，请手动复制")
+            st.info("💡 Schema 已生成完成，点击下载按钮获取文件")
             
-            # 下载格式选择
-            download_format = st.selectbox(
-                "下载格式",
-                ["OpenSPG Schema", "YAML", "JSON"],
-                help="选择下载的文件格式"
-            )
+            # 下载格式选择和下载按钮放在同一行
+            col_download1, col_download2 = st.columns([2, 1])
             
-            # 根据选择的格式准备下载内容
-            if download_format == "OpenSPG Schema":
-                download_content = schema_content
-                file_extension = "txt"
-                mime_type = "text/plain"
-            elif download_format == "YAML":
-                download_content = st.session_state.schema_manager.export_to_yaml()
-                file_extension = "yaml"
-                mime_type = "text/yaml"
-            else:  # JSON
-                download_content = st.session_state.schema_manager.export_to_json()
-                file_extension = "json"
-                mime_type = "application/json"
+            with col_download1:
+                # 下载格式选择
+                download_format = st.selectbox(
+                    "下载格式",
+                    ["OpenSPG Schema", "YAML", "JSON"],
+                    help="选择下载的文件格式"
+                )
             
-            # 下载按钮
-            st.download_button(
-                label=f"💾 下载 {download_format}",
-                data=download_content,
-                file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
-                mime=mime_type
-            )
+            with col_download2:
+                # 根据选择的格式准备下载内容
+                if download_format == "OpenSPG Schema":
+                    download_content = schema_content
+                    file_extension = "txt"
+                    mime_type = "text/plain"
+                elif download_format == "YAML":
+                    download_content = st.session_state.schema_manager.export_to_yaml()
+                    file_extension = "yaml"
+                    mime_type = "text/yaml"
+                else:  # JSON
+                    download_content = st.session_state.schema_manager.export_to_json()
+                    file_extension = "json"
+                    mime_type = "application/json"
+                
+                # 下载按钮
+                st.download_button(
+                    label=f"💾 下载 {download_format}",
+                    data=download_content,
+                    file_name=f"{namespace}_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
+                    mime=mime_type,
+                    use_container_width=True
+                )
+            
+            # 预览选项（可选展开）
+            with st.expander("👁️ 预览 Schema 内容", expanded=False):
+                st.code(schema_content, language="text")
+                
+                # 复制按钮
+                if st.button("📋 复制到剪贴板"):
+                    st.code(schema_content)
+                    st.success("Schema 内容已显示，请手动复制")
             
             # 清空按钮
             if st.button("🗑️ 清空 Schema", type="secondary"):
@@ -310,6 +319,18 @@ def main():
                     st.write("**实体类型分布:**")
                     for entity_type, count in stats['entity_types'].items():
                         st.write(f"- {entity_type}: {count}")
+        else:
+            # 当没有schema时的提示
+            st.info("📝 还没有生成 Schema，请先上传文档并点击'开始处理文档'按钮")
+            st.markdown(
+                """
+                **使用步骤：**
+                1. 📄 上传文档文件（支持 PDF、DOCX、TXT 格式）
+                2. ⚙️ 在侧边栏配置 LLM 设置
+                3. 🚀 点击"开始处理文档"按钮
+                4. 📥 处理完成后在此处下载生成的 Schema
+                """
+            )
 
 def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise=""):
     """处理上传的文档"""
@@ -375,9 +396,21 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             modified_entities = 0
             suggested_deletions = []
             
+            # 维护已知实体列表，用于减少重复创建
+            known_entities = []
+            if hasattr(st.session_state, 'schema_manager') and st.session_state.schema_manager:
+                # 获取已存在的实体名称
+                existing_entities = st.session_state.schema_manager.get_all_entities()
+                known_entities = [entity.get('name', '') for entity in existing_entities if entity.get('name')]
+                logger.info(f"从现有Schema中获取 {len(known_entities)} 个已知实体")
+            
             for chunk_idx, chunk in enumerate(chunks):
                 logger.debug(f"处理分块 {chunk_idx + 1}/{len(chunks)} ({len(chunk)} 字符)")
-                entities = schema_generator.extract_entities_from_chunk(chunk)
+                if known_entities:
+                    logger.debug(f"传递 {len(known_entities)} 个已知实体到分块 {chunk_idx + 1}")
+                
+                # 传递已知实体列表到实体提取方法
+                entities = schema_generator.extract_entities_from_chunk(chunk, known_entities)
                 logger.debug(f"从分块 {chunk_idx + 1} 提取到 {len(entities)} 个实体")
                 
                 for entity in entities:
@@ -390,6 +423,11 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                     if result['action'] == 'created':
                         new_entities += 1
                         logger.info(f"创建新实体: {entity['name']}")
+                        # 将新创建的实体添加到已知实体列表中
+                        entity_name = entity.get('name')
+                        if entity_name and entity_name not in known_entities:
+                            known_entities.append(entity_name)
+                            logger.debug(f"将新实体 {entity_name} 添加到已知实体列表")
                     elif result['action'] == 'updated':
                         modified_entities += 1
                         logger.info(f"更新实体: {entity['name']}")
