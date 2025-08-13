@@ -73,6 +73,13 @@ def main():
         chunk_size = st.slider("文档分块大小", 200, 1000, 500)
         chunk_overlap = st.slider("分块重叠大小", 20, 100, 50)
         
+        # Markdown 处理选项
+        enable_markdown_semantic = st.checkbox(
+            "启用 Markdown 语义分块",
+            value=True,
+            help="对 Markdown 文档进行语义分块，保持表格完整性，提高实体关系提取质量"
+        )
+        
         # Schema 配置
         st.subheader("Schema 设置")
         namespace = st.text_input("命名空间", value="Engineering")
@@ -163,11 +170,24 @@ def main():
             "支持保存和加载 Schema 文件，便于长期项目的逐步完善。"
         )
         
+        # Markdown 文档特殊说明
+        st.info(
+            "📝 **Markdown 文档优化**: 对于 Markdown 文档，系统会进行语义分块处理，"
+            "特别优化表格内容的完整性，有助于更准确地提取实体和关系信息。"
+        )
+        
         uploaded_files = st.file_uploader(
             "选择文档文件",
-            type=["pdf", "docx", "txt"],
+            type=["pdf", "docx", "txt", "md", "markdown"],
             accept_multiple_files=True,
-            help="支持批量上传，可分多次处理不同的文档集合"
+            help="支持批量上传，可分多次处理不同的文档集合。支持格式：PDF、Word文档、文本文件、Markdown文档"
+        )
+        
+        # 添加跳过文档处理的选项
+        skip_document_processing = st.checkbox(
+            "🔧 跳过文档处理，直接进行关系验证",
+            value=False,
+            help="勾选此选项将跳过文档分析和实体提取，直接对当前Schema进行关系验证和优化"
         )
         
         if uploaded_files:
@@ -206,17 +226,47 @@ def main():
         
         # 检查必要条件
         can_process = uploaded_files and (provider == "Ollama" or api_key)
+        can_validate_only = skip_document_processing and 'schema_manager' in st.session_state and st.session_state.schema_manager.entities
         
-        if st.button("🚀 开始处理文档", type="primary", disabled=not can_process):
-            if provider == "OpenAI" and not api_key:
-                st.error("请提供 OpenAI API Key")
-            elif not uploaded_files:
-                st.error("请上传至少一个文档")
-            else:
-                process_documents(
-                    uploaded_files, provider.lower(), api_key, model_name, base_url,
-                    chunk_size, chunk_overlap, namespace, domain_expertise
-                )
+        # 处理按钮的逻辑
+        if skip_document_processing:
+            # 跳过文档处理模式
+            if st.button("🔧 执行关系验证", type="primary", disabled=not can_validate_only):
+                if not can_validate_only:
+                    st.error("请先加载或创建Schema，然后才能进行关系验证")
+                else:
+                    # 直接执行关系验证
+                    with st.spinner("正在执行关系验证..."):
+                        try:
+                            validation_result = st.session_state.schema_manager.validate_and_update_relations()
+                            
+                            # 检查返回结果的完整性
+                            required_keys = ['updated_entities', 'invalid_relations', 'created_entities', 'merged_relations', 'warnings']
+                            missing_keys = [key for key in required_keys if key not in validation_result]
+                            if missing_keys:
+                                error_msg = f"验证结果缺少必要字段: {', '.join(missing_keys)}"
+                                logger.error(error_msg)
+                                st.error(error_msg)
+                            else:
+                                # 显示验证结果
+                                display_validation_results(validation_result)
+                                st.success("✅ 关系验证完成！")
+                                
+                        except Exception as e:
+                            logger.error(f"关系验证失败: {str(e)}", exc_info=True)
+                            st.error(f"❌ 关系验证失败: {str(e)}")
+        else:
+            # 正常文档处理模式
+            if st.button("🚀 开始处理文档", type="primary", disabled=not can_process):
+                if provider == "OpenAI" and not api_key:
+                    st.error("请提供 OpenAI API Key")
+                elif not uploaded_files:
+                    st.error("请上传至少一个文档")
+                else:
+                    process_documents(
+                        uploaded_files, provider.lower(), api_key, model_name, base_url,
+                        chunk_size, chunk_overlap, namespace, domain_expertise, enable_markdown_semantic
+                    )
         
         # 显示处理结果
         if st.session_state.processing_results:
@@ -332,7 +382,7 @@ def main():
                 """
             )
 
-def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise=""):
+def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise="", enable_markdown_semantic=True):
     """处理上传的文档"""
     logger.info(f"开始处理文档批次，共 {len(uploaded_files)} 个文件")
     logger.info(f"配置参数 - 提供商: {provider}, 模型: {model_name}, 分块大小: {chunk_size}, 重叠: {chunk_overlap}")
@@ -367,7 +417,11 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
         return
     
     logger.debug("初始化文档处理器和Schema生成器")
-    doc_processor = DocumentProcessor(chunk_size, chunk_overlap)
+    doc_processor = DocumentProcessor(
+        chunk_size=chunk_size, 
+        chunk_overlap=chunk_overlap,
+        enable_markdown_semantic=enable_markdown_semantic
+    )
     schema_generator = SchemaGenerator(llm_client)
     
     progress_bar = st.progress(0)
@@ -483,8 +537,19 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
     try:
         validation_result = st.session_state.schema_manager.validate_and_update_relations()
         
+        # 检查返回结果的完整性
+        required_keys = ['updated_entities', 'invalid_relations', 'created_entities', 'merged_relations', 'warnings']
+        missing_keys = [key for key in required_keys if key not in validation_result]
+        if missing_keys:
+            error_msg = f"验证结果缺少必要字段: {', '.join(missing_keys)}"
+            logger.error(error_msg)
+            st.error(error_msg)
+            return
+        
+        logger.debug(f"验证结果: {validation_result}")
+        
         # 显示验证结果
-        if validation_result['updated_entities']:
+        if validation_result.get('updated_entities'):
             logger.info(f"更新了 {len(validation_result['updated_entities'])} 个实体的relations")
             st.success(f"✅ 成功更新了 {len(validation_result['updated_entities'])} 个实体的关系引用")
             
@@ -493,7 +558,28 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 for update in validation_result['updated_entities']:
                     st.write(f"**{update['entity']}** - {update['relation']}: {update['old_target']} → {update['new_target']}")
         
-        if validation_result['invalid_relations']:
+        if validation_result.get('created_entities'):
+            logger.info(f"自动创建了 {len(validation_result['created_entities'])} 个缺失的实体")
+            st.success(f"🆕 自动创建了 {len(validation_result['created_entities'])} 个缺失的实体")
+            
+            # 显示创建详情
+            with st.expander("查看自动创建的实体详情"):
+                for created in validation_result['created_entities']:
+                    st.write(f"**{created['entity']}** - {created['reason']}")
+        
+        if validation_result.get('merged_relations'):
+            logger.info(f"合并了 {len(validation_result['merged_relations'])} 组重复关系")
+            st.success(f"🔗 合并了 {len(validation_result['merged_relations'])} 组重复关系")
+            
+            # 显示合并详情
+            with st.expander("查看关系合并详情"):
+                for merged in validation_result['merged_relations']:
+                    st.write(f"**{merged['entity']}** → **{merged['target']}**:")
+                    st.write(f"  主关系: {merged['primary_relation']}")
+                    st.write(f"  合并的关系: {', '.join(merged['merged_relations'])}")
+                    st.write(f"  所有名称: {', '.join(merged['all_names'])}")
+        
+        if validation_result.get('invalid_relations'):
             logger.warning(f"发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
             st.warning(f"⚠️ 发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
             
@@ -502,31 +588,82 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 for invalid in validation_result['invalid_relations']:
                     st.write(f"**{invalid['entity']}** - {invalid['relation']}: {invalid['target']} ({invalid['reason']})")
         
-        if not validation_result['updated_entities'] and not validation_result['invalid_relations']:
+        if (not validation_result.get('updated_entities') and 
+            not validation_result.get('created_entities') and 
+            not validation_result.get('merged_relations') and 
+            not validation_result.get('invalid_relations')):
             logger.info("所有实体关系都已正确")
             st.info("ℹ️ 所有实体关系都已正确，无需更新")
-            
+
     except Exception as e:
+        import traceback
         error_msg = f"验证relations时出错: {str(e)}"
-        logger.error(error_msg)
-        st.error(error_msg)
+        logger.error(f"{error_msg}\n详细错误信息:\n{traceback.format_exc()}")
+        st.error(f"{error_msg}\n\n详细错误信息请查看日志文件。")
     
-    # 处理完成总结
+    # 显示处理统计
     total_files = len(uploaded_files)
     successful_files = len([r for r in st.session_state.processing_results if 'stats' in r])
     failed_files = total_files - successful_files
-    
+
     logger.success(f"文档批次处理完成 - 总计: {total_files}, 成功: {successful_files}, 失败: {failed_files}")
-    
+
     if st.session_state.processing_results:
         total_new = sum(r.get('stats', {}).get('new_entities', 0) for r in st.session_state.processing_results)
         total_modified = sum(r.get('stats', {}).get('modified_entities', 0) for r in st.session_state.processing_results)
         logger.info(f"实体统计 - 新增: {total_new}, 修改: {total_modified}")
-    
+
     progress_bar.progress(1.0)
     status_text.text("处理完成！")
     st.success(f"成功处理 {len(uploaded_files)} 个文档")
     st.rerun()
+
+def display_validation_results(validation_result):
+    """显示关系验证结果"""
+    if validation_result.get('updated_entities'):
+        logger.info(f"更新了 {len(validation_result['updated_entities'])} 个实体的relations")
+        st.success(f"✅ 成功更新了 {len(validation_result['updated_entities'])} 个实体的关系引用")
+        
+        # 显示更新详情
+        with st.expander("查看关系更新详情"):
+            for update in validation_result['updated_entities']:
+                st.write(f"**{update['entity']}** - {update['relation']}: {update['old_target']} → {update['new_target']}")
+    
+    if validation_result.get('created_entities'):
+        logger.info(f"自动创建了 {len(validation_result['created_entities'])} 个缺失的实体")
+        st.success(f"🆕 自动创建了 {len(validation_result['created_entities'])} 个缺失的实体")
+        
+        # 显示创建详情
+        with st.expander("查看自动创建的实体详情"):
+            for created in validation_result['created_entities']:
+                st.write(f"**{created['entity']}** - {created['reason']}")
+    
+    if validation_result.get('merged_relations'):
+        logger.info(f"合并了 {len(validation_result['merged_relations'])} 组重复关系")
+        st.success(f"🔗 合并了 {len(validation_result['merged_relations'])} 组重复关系")
+        
+        # 显示合并详情
+        with st.expander("查看关系合并详情"):
+            for merged in validation_result['merged_relations']:
+                st.write(f"**{merged['entity']}** → **{merged['target']}**:")
+                st.write(f"  主关系: {merged['primary_relation']}")
+                st.write(f"  合并的关系: {', '.join(merged['merged_relations'])}")
+                st.write(f"  所有名称: {', '.join(merged['all_names'])}")
+    
+    if validation_result.get('invalid_relations'):
+        logger.warning(f"发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
+        st.warning(f"⚠️ 发现 {len(validation_result['invalid_relations'])} 个无效的关系引用")
+        
+        # 显示无效关系详情
+        with st.expander("查看无效关系详情"):
+            for invalid in validation_result['invalid_relations']:
+                st.write(f"**{invalid['entity']}** - {invalid['relation']}: {invalid['target']} ({invalid['reason']})")
+    
+    if (not validation_result.get('updated_entities') and 
+        not validation_result.get('created_entities') and 
+        not validation_result.get('merged_relations') and 
+        not validation_result.get('invalid_relations')):
+        st.info("✅ 所有关系引用都是有效的，无需更新")
 
 if __name__ == "__main__":
     main()

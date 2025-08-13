@@ -462,11 +462,16 @@ class SchemaManager:
         return '\n'.join(lines)
     
     def validate_and_update_relations(self) -> Dict[str, Any]:
-        """验证并更新所有实体的relations，将中文实体名称替换为英文实体名称"""
+        """验证并更新所有实体的relations，将中文实体名称替换为英文实体名称，自动创建缺失实体，合并重复关系"""
+        from src.logger import logger
+        
+        logger.info(f"开始验证和更新关系，共有 {len(self.entities)} 个实体")
         
         validation_result = {
             'updated_entities': [],
             'invalid_relations': [],
+            'created_entities': [],
+            'merged_relations': [],
             'warnings': []
         }
         
@@ -482,25 +487,44 @@ class SchemaManager:
                 chinese_to_english[chinese_name] = english_name
                 english_names.add(english_name)
         
-        # 遍历所有实体，验证和更新relations
-        for entity_key, entity in self.entities.items():
+        # 遍历所有实体，验证和更新relations（使用列表避免字典大小变化问题）
+        entities_to_process = list(self.entities.items())
+        for entity_key, entity in entities_to_process:
+            from src.logger import logger
+            logger.debug(f"开始处理实体: {entity_key} ({entity.get('chinese_name', 'N/A')})")
+            
             relations = entity.get('relations', {})
             if not relations:
+                logger.debug(f"实体 {entity_key} 没有关系定义，跳过")
                 continue
+                
+            logger.debug(f"实体 {entity_key} 有 {len(relations)} 个关系需要验证: {list(relations.keys())}")
                 
             updated_relations = {}
             entity_updated = False
             
+            # 用于检测重复关系的字典：target -> [relation_keys]
+            target_to_relations = {}
+            
             for relation_key, relation_def in relations.items():
+                logger.debug(f"处理实体 {entity_key} 的关系: {relation_key} -> {relation_def}")
+                
                 if isinstance(relation_def, dict) and 'target' in relation_def:
                     target = relation_def['target']
                     original_target = target
+                    logger.debug(f"关系 {entity_key}.{relation_key} 的目标: {target} (类型: {type(target)})")
+                    
+                    # 检查target是否为有效值
+                    if target is None or not isinstance(target, str) or not target.strip():
+                        logger.warning(f"跳过实体 {entity_key} 的无效关系 {relation_key}: target={target} (类型: {type(target)})")
+                        continue  # 跳过无效的关系定义
                     
                     # 检查target是否为中文实体名称，需要转换为英文名称
                     if target in chinese_to_english:
                         # 找到对应的英文名称
                         english_target = chinese_to_english[target]
                         relation_def['target'] = english_target
+                        target = english_target
                         entity_updated = True
                         
                         validation_result['updated_entities'].append({
@@ -512,12 +536,21 @@ class SchemaManager:
                     
                     # 检查target是否为有效的实体名称
                     elif target not in english_names and target not in chinese_to_english:
-                        validation_result['invalid_relations'].append({
-                            'entity': entity.get('name', entity_key),
-                            'relation': relation_key,
-                            'target': target,
-                            'reason': '目标实体不存在'
+                        # 自动创建缺失的目标实体
+                        self._create_missing_entity(target)
+                        english_names.add(target)
+                        entity_updated = True
+                        
+                        validation_result['created_entities'].append({
+                            'entity': target,
+                            'reason': f'为关系 {entity.get("name", entity_key)}.{relation_key} 自动创建'
                         })
+                    
+                    # 检测重复关系（相同target，不同relation名称）
+                    if target in target_to_relations:
+                        target_to_relations[target].append(relation_key)
+                    else:
+                        target_to_relations[target] = [relation_key]
                     
                     updated_relations[relation_key] = relation_def
                 
@@ -525,10 +558,17 @@ class SchemaManager:
                     # 兼容旧格式：relation_key: target_value
                     target = relation_def
                     original_target = target
+                    logger.debug(f"处理旧格式关系 {entity_key}.{relation_key}: {target} (类型: {type(target)})")
+                    
+                    # 检查target是否为有效值
+                    if target is None or not isinstance(target, str) or not target.strip():
+                        logger.warning(f"跳过实体 {entity_key} 的无效旧格式关系 {relation_key}: target={target} (类型: {type(target)})")
+                        continue  # 跳过无效的关系定义
                     
                     if target in chinese_to_english:
                         # 转换为新格式并更新target
                         english_target = chinese_to_english[target]
+                        target = english_target
                         updated_relations[relation_key] = {
                             'name': relation_key,
                             'target': english_target
@@ -543,15 +583,21 @@ class SchemaManager:
                         })
                     
                     elif target not in english_names and target not in chinese_to_english:
-                        validation_result['invalid_relations'].append({
-                            'entity': entity.get('name', entity_key),
-                            'relation': relation_key,
-                            'target': target,
-                            'reason': '目标实体不存在'
+                        # 自动创建缺失的目标实体
+                        self._create_missing_entity(target)
+                        english_names.add(target)
+                        entity_updated = True
+                        
+                        validation_result['created_entities'].append({
+                            'entity': target,
+                            'reason': f'为关系 {entity.get("name", entity_key)}.{relation_key} 自动创建'
                         })
                         
-                        # 保持原格式但标记为无效
-                        updated_relations[relation_key] = relation_def
+                        # 转换为新格式
+                        updated_relations[relation_key] = {
+                            'name': relation_key,
+                            'target': target
+                        }
                     
                     else:
                         # target已经是英文名称，转换为新格式
@@ -559,13 +605,79 @@ class SchemaManager:
                             'name': relation_key,
                             'target': target
                         }
+                    
+                    # 检测重复关系（相同target，不同relation名称）
+                    if target in target_to_relations:
+                        target_to_relations[target].append(relation_key)
+                    else:
+                        target_to_relations[target] = [relation_key]
+            
+            # 处理重复关系：合并相同target的不同关系名称
+            for target, relation_keys in target_to_relations.items():
+                if len(relation_keys) > 1:
+                    # 选择第一个关系作为主关系，其他关系名称作为别名
+                    primary_relation = relation_keys[0]
+                    merged_names = [updated_relations[key].get('name', key) for key in relation_keys]
+                    
+                    # 更新主关系，添加别名信息
+                    if 'aliases' not in updated_relations[primary_relation]:
+                        updated_relations[primary_relation]['aliases'] = []
+                    
+                    for i, key in enumerate(relation_keys[1:], 1):
+                        updated_relations[primary_relation]['aliases'].append(merged_names[i])
+                        # 移除重复的关系
+                        del updated_relations[key]
+                    
+                    validation_result['merged_relations'].append({
+                        'entity': entity.get('name', entity_key),
+                        'target': target,
+                        'primary_relation': primary_relation,
+                        'merged_relations': relation_keys[1:],
+                        'all_names': merged_names
+                    })
+                    
+                    entity_updated = True
             
             # 如果有更新，保存到实体中
             if entity_updated or updated_relations != relations:
                 self.entities[entity_key]['relations'] = updated_relations
                 self.last_modified = datetime.now()
+                logger.info(f"实体 {entity_key} 的关系已更新，最终关系数量: {len(updated_relations)}")
+            else:
+                logger.debug(f"实体 {entity_key} 的关系无需更新")
         
+        logger.info(f"关系验证完成 - 更新: {len(validation_result['updated_entities'])}, 创建: {len(validation_result['created_entities'])}, 合并: {len(validation_result['merged_relations'])}, 无效: {len(validation_result['invalid_relations'])}")
         return validation_result
+    
+    def _create_missing_entity(self, entity_name: str) -> None:
+        """自动创建缺失的目标实体（最简单形式）"""
+        from src.logger import logger
+        
+        # 生成中文名称（如果实体名称包含中文字符，则使用原名称，否则使用英文名称）
+        chinese_name = entity_name
+        if not any('\u4e00' <= char <= '\u9fff' for char in entity_name):
+            # 如果是纯英文名称，尝试生成一个简单的中文名称
+            chinese_name = entity_name
+        
+        # 创建最简单的实体结构
+        new_entity = {
+            'name': entity_name,
+            'english_name': entity_name,
+            'chinese_name': chinese_name,
+            'description': f'自动创建的实体：{chinese_name}',
+            'openspg_type': 'EntityType',
+            'entity_type': 'Concept',
+            'properties': self._build_standard_properties(),
+            'relations': {},
+            'created_at': datetime.now().isoformat(),
+            'auto_created': True
+        }
+        
+        # 添加到实体集合中
+        self.entities[entity_name] = new_entity
+        self.last_modified = datetime.now()
+        
+        logger.info(f"自动创建实体: {entity_name} ({chinese_name})")
     
     def get_entity_by_chinese_name(self, chinese_name: str) -> Optional[Dict[str, Any]]:
         """根据中文名称查找实体"""

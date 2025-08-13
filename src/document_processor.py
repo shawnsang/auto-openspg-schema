@@ -15,6 +15,9 @@ import chardet
 # 导入日志
 from .logger import logger
 
+# 导入Markdown处理器
+from .markdown_processor import MarkdownProcessor
+
 # 文档处理库
 try:
     import PyPDF2
@@ -33,17 +36,31 @@ except ImportError:
 class DocumentProcessor:
     """文档处理器，支持多种格式的文档读取和分块"""
     
-    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 200):
+    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 200, 
+                 enable_markdown_semantic: bool = True):
         """
         初始化文档处理器
         
         Args:
             chunk_size: 文档分块大小
             chunk_overlap: 分块重叠大小
+            enable_markdown_semantic: 是否启用Markdown语义分块
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        logger.info(f"文档处理器初始化完成 - 分块大小: {chunk_size}, 重叠大小: {chunk_overlap}")
+        self.enable_markdown_semantic = enable_markdown_semantic
+        
+        # 初始化Markdown处理器
+        if enable_markdown_semantic:
+            self.markdown_processor = MarkdownProcessor(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                preserve_tables=True
+            )
+            logger.info(f"文档处理器初始化完成 - 分块大小: {chunk_size}, 重叠大小: {chunk_overlap}, Markdown语义分块: 启用")
+        else:
+            self.markdown_processor = None
+            logger.info(f"文档处理器初始化完成 - 分块大小: {chunk_size}, 重叠大小: {chunk_overlap}, Markdown语义分块: 禁用")
     
     def process_document(self, file_path: str) -> List[Dict[str, Any]]:
         """
@@ -62,6 +79,14 @@ class DocumentProcessor:
             file_ext = os.path.splitext(file_path)[1].lower()
             logger.debug(f"检测到文件格式: {file_ext}")
             
+            # 检查是否为Markdown文件且启用了语义分块
+            if (self.enable_markdown_semantic and 
+                self.markdown_processor and 
+                self.markdown_processor.is_markdown_file(file_path)):
+                logger.info("使用 Markdown 语义分块处理器处理文档")
+                return self.markdown_processor.process_markdown_file(file_path)
+            
+            # 传统文档处理流程
             if file_ext == '.pdf':
                 logger.info("使用 PDF 提取器处理文档")
                 text = self._extract_text_from_pdf(file_path)
@@ -70,6 +95,9 @@ class DocumentProcessor:
                 text = self._extract_text_from_docx(file_path)
             elif file_ext == '.txt':
                 logger.info("使用 TXT 提取器处理文档")
+                text = self._extract_text_from_txt(file_path)
+            elif file_ext in ['.md', '.markdown', '.mdown', '.mkd']:
+                logger.info("使用 TXT 提取器处理 Markdown 文档（传统模式）")
                 text = self._extract_text_from_txt(file_path)
             else:
                 logger.error(f"不支持的文件格式: {file_ext}")
@@ -310,9 +338,18 @@ class DocumentProcessor:
         file_size = os.path.getsize(file_path)
         file_ext = os.path.splitext(file_path)[1].lower()
         
+        # 支持的文件格式
+        supported_formats = ['.pdf', '.docx', '.txt', '.md', '.markdown', '.mdown', '.mkd']
+        
+        # 检查是否支持Markdown语义分块
+        markdown_semantic = (self.enable_markdown_semantic and 
+                           self.markdown_processor and 
+                           self.markdown_processor.is_markdown_file(file_path))
+        
         return {
             'filename': os.path.basename(file_path),
             'file_size': file_size,
             'file_type': file_ext,
-            'supported': file_ext in ['.pdf', '.docx', '.txt']
+            'supported': file_ext in supported_formats,
+            'markdown_semantic': markdown_semantic
         }
