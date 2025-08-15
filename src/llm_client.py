@@ -218,16 +218,28 @@ class LLMClient:
         Returns:
             str: 原始的OpenSPG Schema格式文本
         """
-        logger.info(f"开始实体提取，文本长度: {len(text)} 字符")
-        if known_entities:
-            logger.info(f"已知实体数量: {len(known_entities)}")
-            logger.debug(f"已知实体列表: {', '.join(known_entities[:10])}{'...' if len(known_entities) > 10 else ''}")
-        logger.debug(f"输入文本: {text[:300]}{'...' if len(text) > 300 else ''}")
-        
-        messages = self._create_entity_extraction_messages(text, known_entities)
-        logger.debug(f"构建了 {len(messages)} 条消息用于实体提取")
-        
         try:
+            logger.info(f"开始实体提取，文本长度: {len(text)} 字符")
+            logger.debug(f"text类型: {type(text)}, known_entities类型: {type(known_entities)}")
+            
+            # 确保text是字符串类型
+            if not isinstance(text, str):
+                logger.warning(f"text不是字符串类型，正在转换: {type(text)}")
+                text = str(text)
+            
+            # 确保known_entities是正确的类型
+            if known_entities is not None and not isinstance(known_entities, list):
+                logger.warning(f"known_entities不是列表类型，正在转换: {type(known_entities)}")
+                known_entities = list(known_entities) if known_entities else []
+            
+            if known_entities:
+                logger.info(f"已知实体数量: {len(known_entities)}")
+                logger.debug(f"已知实体列表: {', '.join(str(e) for e in known_entities[:10])}{'...' if len(known_entities) > 10 else ''}")
+            logger.debug(f"输入文本: {text[:300]}{'...' if len(text) > 300 else ''}")
+            
+            messages = self._create_entity_extraction_messages(text, known_entities)
+            logger.debug(f"构建了 {len(messages)} 条消息用于实体提取")
+            
             logger.debug("调用 LLM 进行实体提取")
             response = self.client.chat_completion(messages)
             logger.debug(f"LLM 返回响应: {response[:200]}{'...' if len(response) > 200 else ''}")
@@ -237,6 +249,7 @@ class LLMClient:
         except Exception as e:
             error_msg = f"实体提取失败: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            logger.error(f"调试信息 - text类型: {type(text)}, known_entities类型: {type(known_entities)}")
             return ""
     
     def suggest_entity_deletions(self, existing_entities: List[Dict], document_chunks: List[str]) -> List[Dict[str, str]]:
@@ -318,7 +331,7 @@ class LLMClient:
 {self._format_known_entities_section(known_entities)}
 
 文档文本：
-{text}
+{str(text)}
 
 返回格式请参考：
 
@@ -356,9 +369,15 @@ Shotcrete(喷射混凝土): EntityType
         
         # 分组显示，每行显示多个实体
         entities_per_line = 5
-        for i in range(0, len(sorted_entities), entities_per_line):
-            line_entities = sorted_entities[i:i + entities_per_line]
-            entities_text += "- " + ", ".join(line_entities) + "\n"
+        try:
+            for i in range(0, len(sorted_entities), entities_per_line):
+                line_entities = sorted_entities[i:i + entities_per_line]
+                entities_text += "- " + ", ".join(str(entity) for entity in line_entities) + "\n"
+        except Exception as e:
+            logger.error(f"格式化已知实体时出错: {e}, sorted_entities类型: {type(sorted_entities)}")
+            # 降级处理：简单列出所有实体
+            for entity in sorted_entities:
+                entities_text += f"- {str(entity)}\n"
     
         entities_text += "\n**重要提示：**\n"
         entities_text += "1. 如果文档中的概念与上述已知实体相同，不用再次识别\n"

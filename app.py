@@ -460,7 +460,11 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 current_chunk_text.text(f"📄 当前分块: {chunk_idx + 1}/{len(chunks)} (长度: {len(chunk)} 字符)")
                 
                 # 显示分块内容
-                chunk_preview = chunk[:500] + "..." if len(chunk) > 500 else chunk
+                try:
+                    chunk_preview = chunk[:500] + "..." if len(chunk) > 500 else chunk
+                except Exception as e:
+                    logger.error(f"创建chunk_preview时出错: {str(e)}, chunk类型: {type(chunk)}")
+                    chunk_preview = str(chunk)[:500] + "..." if len(str(chunk)) > 500 else str(chunk)
                 chunk_content_area.text_area(
                     f"分块 {chunk_idx + 1} 内容预览",
                     value=chunk_preview,
@@ -473,11 +477,15 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 chunk_logger.log_chunk_content(chunk, chunk_idx)
                 
                 # 提取Schema文本
-                schema_text = schema_generator.extract_entities_from_chunk(chunk, [])
+                schema_text = llm_client.extract_entities_from_text(chunk, [])
                 logger.debug(f"从分块 {chunk_idx + 1} 提取到Schema文本长度: {len(schema_text)} 字符")
                 
                 # 显示LLM响应
-                llm_preview = schema_text[:500] + "..." if len(schema_text) > 500 else schema_text
+                try:
+                    llm_preview = schema_text[:500] + "..." if len(schema_text) > 500 else schema_text
+                except Exception as e:
+                    logger.error(f"创建llm_preview时出错: {str(e)}, schema_text类型: {type(schema_text)}")
+                    llm_preview = str(schema_text)[:500] + "..." if len(str(schema_text)) > 500 else str(schema_text)
                 llm_response_area.text_area(
                     f"分块 {chunk_idx + 1} LLM响应预览",
                     value=llm_preview,
@@ -491,24 +499,32 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 # 保存分块内容到文件
                 chunk_filename = f"chunk_{chunk_idx + 1:03d}.txt"
                 chunk_filepath = os.path.join(chunks_dir, chunk_filename)
-                with open(chunk_filepath, 'w', encoding='utf-8') as f:
-                    f.write(f"文件名: {uploaded_file.name}\n")
-                    f.write(f"分块序号: {chunk_idx + 1}/{len(chunks)}\n")
-                    f.write(f"分块大小: {len(chunk)} 字符\n")
-                    f.write(f"处理时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write("=" * 50 + "\n")
-                    f.write(chunk)
+                try:
+                    with open(chunk_filepath, 'w', encoding='utf-8') as f:
+                        f.write(f"文件名: {uploaded_file.name}\n")
+                        f.write(f"分块序号: {chunk_idx + 1}/{len(chunks)}\n")
+                        f.write(f"分块大小: {len(chunk)} 字符\n")
+                        f.write(f"处理时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write("=" * 50 + "\n")
+                        f.write(str(chunk))  # 确保是字符串
+                except Exception as e:
+                    logger.error(f"保存分块文件时出错: {str(e)}, chunk类型: {type(chunk)}")
+                    raise
                 
                 # 保存Schema内容到文件
                 schema_filename = f"schema_{chunk_idx + 1:03d}.txt"
                 schema_filepath = os.path.join(schemas_dir, schema_filename)
-                with open(schema_filepath, 'w', encoding='utf-8') as f:
-                    f.write(f"文件名: {uploaded_file.name}\n")
-                    f.write(f"分块序号: {chunk_idx + 1}/{len(chunks)}\n")
-                    f.write(f"Schema长度: {len(schema_text)} 字符\n")
-                    f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write("=" * 50 + "\n")
-                    f.write(schema_text)
+                try:
+                    with open(schema_filepath, 'w', encoding='utf-8') as f:
+                        f.write(f"文件名: {uploaded_file.name}\n")
+                        f.write(f"分块序号: {chunk_idx + 1}/{len(chunks)}\n")
+                        f.write(f"Schema长度: {len(schema_text)} 字符\n")
+                        f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write("=" * 50 + "\n")
+                        f.write(str(schema_text))  # 确保是字符串
+                except Exception as e:
+                    logger.error(f"保存Schema文件时出错: {str(e)}, schema_text类型: {type(schema_text)}")
+                    raise
                 
                 logger.debug(f"已保存分块文件: {chunk_filepath}")
                 logger.debug(f"已保存Schema文件: {schema_filepath}")
@@ -518,16 +534,21 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 chunk_logger.log_chunk_complete(chunk_idx, chunk_processing_time)
                 
                 # 保存分块和对应的Schema文本到session state
-                chunk_info = {
-                    'filename': uploaded_file.name,
-                    'chunk_index': chunk_idx,
-                    'total_chunks': len(chunks),
-                    'content': chunk,
-                    'schema_text': schema_text,
-                    'chunk_file': chunk_filepath,
-                    'schema_file': schema_filepath
-                }
-                st.session_state.document_chunks.append(chunk_info)
+                try:
+                    chunk_info = {
+                        'filename': str(uploaded_file.name),
+                        'chunk_index': int(chunk_idx),
+                        'total_chunks': int(len(chunks)),
+                        'content': str(chunk),
+                        'schema_text': str(schema_text),
+                        'chunk_file': str(chunk_filepath),
+                        'schema_file': str(schema_filepath)
+                    }
+                    st.session_state.document_chunks.append(chunk_info)
+                except Exception as e:
+                    logger.error(f"创建chunk_info时出错: {str(e)}")
+                    logger.error(f"chunk类型: {type(chunk)}, schema_text类型: {type(schema_text)}")
+                    raise
                 
                 # 更新进度
                 chunk_progress = (chunk_idx + 1) / len(chunks)
