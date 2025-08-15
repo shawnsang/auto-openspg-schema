@@ -86,12 +86,28 @@ class DocumentProcessor:
                 logger.info("使用 Markdown 语义分块处理器处理文档")
                 return self.markdown_processor.process_markdown_file(file_path)
             
+            # 对于DOCX文件，如果启用了Markdown语义分块，则转换为Markdown后使用语义分块
+            if (file_ext == '.docx' and 
+                self.enable_markdown_semantic and 
+                self.markdown_processor):
+                logger.info("将 DOCX 转换为 Markdown 并使用语义分块处理")
+                markdown_text = self._convert_docx_to_markdown(file_path)
+                # 创建临时Markdown文件进行处理
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as temp_file:
+                    temp_file.write(markdown_text)
+                    temp_file_path = temp_file.name
+                try:
+                    return self.markdown_processor.process_markdown_file(temp_file_path)
+                finally:
+                    os.unlink(temp_file_path)
+            
             # 传统文档处理流程
             if file_ext == '.pdf':
                 logger.info("使用 PDF 提取器处理文档")
                 text = self._extract_text_from_pdf(file_path)
             elif file_ext == '.docx':
-                logger.info("使用 DOCX 提取器处理文档")
+                logger.info("使用 DOCX 提取器处理文档（传统模式）")
                 text = self._extract_text_from_docx(file_path)
             elif file_ext == '.txt':
                 logger.info("使用 TXT 提取器处理文档")
@@ -197,6 +213,86 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"DOCX 文本提取失败: {str(e)}")
             raise Exception(f"DOCX 文件读取失败: {str(e)}")
+    
+    def _convert_docx_to_markdown(self, file_path: str) -> str:
+        """将 DOCX 文件转换为 Markdown 格式"""
+        if Document is None:
+            logger.error("python-docx 库未安装，无法处理 DOCX 文件")
+            raise ImportError("python-docx 库未安装，请运行: pip install python-docx")
+        
+        logger.debug(f"开始将 DOCX 转换为 Markdown: {file_path}")
+        
+        try:
+            doc = Document(file_path)
+            markdown_lines = []
+            
+            # 处理段落
+            for paragraph in doc.paragraphs:
+                if not paragraph.text.strip():
+                    continue
+                    
+                # 检查是否为标题
+                if paragraph.style.name.startswith('Heading'):
+                    # 提取标题级别
+                    try:
+                        level = int(paragraph.style.name.split()[-1])
+                        level = min(level, 6)  # Markdown 最多支持6级标题
+                    except (ValueError, IndexError):
+                        level = 1
+                    
+                    markdown_lines.append(f"{'#' * level} {paragraph.text.strip()}")
+                    markdown_lines.append("")  # 标题后添加空行
+                else:
+                    # 普通段落
+                    text = paragraph.text.strip()
+                    if text:
+                        # 检查是否为列表项（简单检测）
+                         if text.startswith(('•', '·', '-', '*')) or re.match(r'^\d+\.', text):
+                             # 转换为Markdown列表格式
+                             if text.startswith(('•', '·')):
+                                 text = text[1:].strip()
+                                 markdown_lines.append(f"- {text}")
+                             elif text.startswith(('-', '*')):
+                                 text = text[1:].strip()
+                                 markdown_lines.append(f"- {text}")
+                             else:
+                                 # 数字列表
+                                 markdown_lines.append(text)
+                         else:
+                             markdown_lines.append(text)
+                             markdown_lines.append("")  # 段落后添加空行
+            
+            # 处理表格
+            for table_idx, table in enumerate(doc.tables):
+                markdown_lines.append("")  # 表格前添加空行
+                
+                # 处理表格行
+                for row_idx, row in enumerate(table.rows):
+                    row_cells = []
+                    for cell in row.cells:
+                        # 清理单元格文本
+                        cell_text = cell.text.strip().replace('\n', ' ').replace('|', '\|')
+                        row_cells.append(cell_text)
+                    
+                    # 生成Markdown表格行
+                    markdown_lines.append(f"| {' | '.join(row_cells)} |")
+                    
+                    # 如果是第一行，添加分隔符
+                    if row_idx == 0:
+                        separator = ['---'] * len(row_cells)
+                        markdown_lines.append(f"| {' | '.join(separator)} |")
+                
+                markdown_lines.append("")  # 表格后添加空行
+            
+            markdown_text = "\n".join(markdown_lines)
+            logger.success(f"DOCX 转换为 Markdown 完成，生成 {len(markdown_text)} 字符")
+            return markdown_text
+            
+        except Exception as e:
+            logger.error(f"DOCX 转换为 Markdown 失败: {str(e)}")
+            # 如果转换失败，回退到传统文本提取
+            logger.warning("回退到传统文本提取模式")
+            return self._extract_text_from_docx(file_path)
     
     def _extract_text_from_txt(self, file_path: str) -> str:
         """从 TXT 文件提取文本"""

@@ -52,12 +52,15 @@ class SchemaGenerator:
             # 移除semanticType属性，因为这不是必需的标准属性
         }
     
-    def extract_entities_from_chunk(self, chunk: Dict[str, Any], known_entities: List[str] = None) -> List[Dict[str, Any]]:
-        """从文档块中提取实体
+    def extract_entities_from_chunk(self, chunk: Dict[str, Any], known_entities: List[str] = None) -> str:
+        """从文档块中提取实体，返回原始Schema格式文本
         
         Args:
             chunk: 文档块字典，包含content字段
             known_entities: 已知实体的英文名称列表，用于减少重复创建
+            
+        Returns:
+            str: 原始的OpenSPG Schema格式文本
         """
         chunk_content = chunk.get('content', '')
         logger.info(f"开始从文档块提取实体，内容长度: {len(chunk_content)} 字符")
@@ -67,33 +70,14 @@ class SchemaGenerator:
         logger.debug(f"文档块内容预览: {chunk_content[:200]}{'...' if len(chunk_content) > 200 else ''}")
         
         # 使用 LLM 提取实体（传递已知实体列表）
-        logger.debug("调用 LLM 客户端提取原始实体")
-        raw_entities = self.llm_client.extract_entities_from_text(chunk_content, known_entities)
-        logger.info(f"LLM 返回 {len(raw_entities)} 个原始实体")
+        logger.debug("调用 LLM 客户端提取实体Schema")
+        schema_text = self.llm_client.extract_entities_from_text(chunk_content, known_entities)
+        logger.info(f"LLM 返回Schema文本长度: {len(schema_text)} 字符")
+        logger.debug(f"Schema文本预览: {schema_text[:200]}{'...' if len(schema_text) > 200 else ''}")
         
-        # 标准化实体格式
-        logger.debug("开始标准化实体格式")
-        standardized_entities = []
+        logger.success(f"文档块实体提取完成")
         
-        for i, entity in enumerate(raw_entities):
-            # 清理实体名称用于日志显示
-            display_name = self._clean_name_for_display(entity.get('name', 'Unknown'))
-            logger.debug(f"标准化实体 {i+1}/{len(raw_entities)}: {display_name}")
-            standardized_entity = self._standardize_entity(entity)
-            if standardized_entity:
-                standardized_entities.append(standardized_entity)
-                logger.debug(f"实体 {display_name} 标准化成功")
-            else:
-                logger.warning(f"实体 {display_name} 标准化失败，已跳过")
-        
-        logger.success(f"文档块实体提取完成，成功标准化 {len(standardized_entities)}/{len(raw_entities)} 个实体")
-        
-        # 记录标准化后的实体名称
-        if standardized_entities:
-            entity_names = [entity.get('name', 'Unknown') for entity in standardized_entities]
-            logger.info(f"标准化后的实体: {', '.join(entity_names)}")
-        
-        return standardized_entities
+        return schema_text
 
     def _clean_name_for_display(self, name: str) -> str:
         """清理实体名称用于日志显示"""

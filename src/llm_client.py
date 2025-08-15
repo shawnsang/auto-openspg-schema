@@ -208,12 +208,15 @@ class LLMClient:
         
         self.model_name = model_name
     
-    def extract_entities_from_text(self, text: str, known_entities: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """从文本中提取实体信息
+    def extract_entities_from_text(self, text: str, known_entities: Optional[List[str]] = None) -> str:
+        """从文本中提取实体信息，返回原始Schema格式文本
         
         Args:
             text: 要分析的文本
             known_entities: 已知实体的英文名称列表，用于减少重复创建
+            
+        Returns:
+            str: 原始的OpenSPG Schema格式文本
         """
         logger.info(f"开始实体提取，文本长度: {len(text)} 字符")
         if known_entities:
@@ -227,72 +230,14 @@ class LLMClient:
         try:
             logger.debug("调用 LLM 进行实体提取")
             response = self.client.chat_completion(messages)
-            logger.debug(f"LLM 返回响应，开始解析实体")
-            entities = self._parse_entity_response(response)
-            logger.success(f"实体提取完成，共提取到 {len(entities)} 个实体")
+            logger.debug(f"LLM 返回响应: {response[:200]}{'...' if len(response) > 200 else ''}")
+            logger.success(f"实体提取完成，返回Schema文本长度: {len(response)} 字符")
             
-            # 详细记录提取到的实体列表
-            if entities:
-                entity_names = [entity.get('name', 'Unknown') for entity in entities]
-                logger.info(f"提取到的实体: {', '.join(entity_names)}")
-                
-                # 记录完整的实体详细信息
-                logger.info("=== 实体详细信息列表 ===")
-                for i, entity in enumerate(entities, 1):
-                    logger.info(f"实体 {i}:")
-                    logger.info(f"  名称: {entity.get('name', 'N/A')}")
-                    logger.info(f"  英文名: {entity.get('english_name', 'N/A')}")
-                    logger.info(f"  中文名: {entity.get('chinese_name', 'N/A')}")
-                    logger.info(f"  类型: {entity.get('entity_type', 'N/A')}")
-                    logger.info(f"  描述: {entity.get('description', 'N/A')}")
-                    logger.info(f"  分类: {entity.get('category', 'N/A')}")
-                    
-                    # 记录属性信息
-                    properties = entity.get('properties', {})
-                    if properties:
-                        logger.info(f"  属性数量: {len(properties)}")
-                        for prop_name, prop_info in properties.items():
-                            if isinstance(prop_info, dict):
-                                prop_type = prop_info.get('type', 'N/A')
-                                prop_display_name = prop_info.get('name', prop_name)
-                                logger.info(f"    - {prop_name}: {prop_display_name} ({prop_type})")
-                            else:
-                                logger.info(f"    - {prop_name}: {prop_info}")
-                    else:
-                        logger.info(f"  属性数量: 0")
-                    
-                    # 记录关系信息
-                    relations = entity.get('relations', {})
-                    if relations:
-                        logger.info(f"  关系数量: {len(relations)}")
-                        for rel_name, rel_info in relations.items():
-                            if isinstance(rel_info, dict):
-                                rel_target = rel_info.get('target', 'N/A')
-                                rel_display_name = rel_info.get('name', rel_name)
-                                logger.info(f"    - {rel_name}: {rel_display_name} -> {rel_target}")
-                            else:
-                                logger.info(f"    - {rel_name}: {rel_info}")
-                    else:
-                        logger.info(f"  关系数量: 0")
-                    
-                    logger.info("  ---")
-                
-                logger.info("=== 实体列表记录完成 ===")
-                
-                # 记录JSON格式的完整实体数据（便于程序化处理）
-                try:
-                    entities_json = json.dumps(entities, ensure_ascii=False, indent=2)
-                    logger.debug(f"完整实体JSON数据:\n{entities_json}")
-                except Exception as e:
-                    logger.warning(f"无法序列化实体数据为JSON: {e}")
-            else:
-                logger.warning("未提取到任何实体")
-            
-            return entities
+            return response.strip()
         except Exception as e:
             error_msg = f"实体提取失败: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            return []
+            return ""
     
     def suggest_entity_deletions(self, existing_entities: List[Dict], document_chunks: List[str]) -> List[Dict[str, str]]:
         """基于文档内容建议删除的实体"""
@@ -368,220 +313,30 @@ class LLMClient:
             {
                 "role": "user",
                 "content": f"""
-你是一个专业的OpenSPG知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下{'工程设计' if not self.domain_expertise else self.domain_expertise}文档文本中提取{f'与{self.domain_expertise}领域相关的' if self.domain_expertise else ''}实体信息，并按照OpenSPG声明式Schema脚本的标准格式组织。
+你是一个专业的OpenSPG知识图谱构建专家{f'，特别专精于{self.domain_expertise}领域' if self.domain_expertise else ''}。请从以下文档文本中提取实体信息，并按照OpenSPG Schema格式直接返回。
 
 {self._format_known_entities_section(known_entities)}
 
 文档文本：
 {text}
 
-## OpenSPG Schema语法规范
+返回格式请参考：
 
-### 约束条件
-1. 声明式Schema脚本采用逐行解析的方式，定义上要遵循顺序原则，即父类型要在子类型之前定义、属性上使用的类型也需要在其所属类型定义之前先定义好
-2. 属性id、name、description为内置属性，不需要再声明
-3. 属性类型只支持以下几种：
-   - 基本类型：Text(文本)、Integer(整型)、Float(浮点数)
-   - 标准类型：STD.ChinaMobile(国内手机号)、STD.Email(电子邮箱)、STD.IdCardNo(身份证)、STD.MacAddress(MAC地址)、STD.Date(日期)、STD.ChinaTelCode(国内通讯号)、STD.Timestamp(时间戳)
-4. 属性英文名称首字母必须为小写字母，且只支持英文字母和数字
-5. 关系属性类型只支持基本类型
-
-### 语法结构（6层缩进）
-- 第一层（无缩进）：定义类型、命名空间
-- 第二层：定义类型的元信息，比如描述、属性、关系等
-- 第三层：定义属性/关系的名称和类型
-- 第四层：定义属性/关系的元信息，比如约束、子属性、逻辑规则等
-- 第五层：定义子属性的名称和类型
-- 第六层：定义子属性的元信息，比如描述、约束
-
-### 标准格式示例
-```
-namespace DEFAULT
-
-TypeA(实体类型A): EntityType
-    desc: 实体类型描述
+Shotcrete(喷射混凝土): EntityType
     properties:
-        property1(属性1): Text
-        property2(属性2): Float
+        strengthGrade(强度等级): Text
+        applicationMethod(施作方法): Text
     relations:
-        relation1(关系1): TypeB
-        relation2(关系2): TypeC
+        supports(支撑): WaterproofBoard
+        usedInInitialSupport(用于初期支护): InitialSupport
+        appliedTo(应用于): TunnelSection
 
-TypeB(实体类型B): EntityType
-    desc: 实体类型B的描述
-```
-
-## 实体识别标准
-
-### 什么是合适的实体：
-1. **抽象概念类型** (ConceptType)：
-   - 通用的工程概念和术语（如"质量控制"、"安全管理"）
-   - 标准化的工艺流程名称（如"焊接工艺"、"检测流程"）
-   - 技术参数类别（如"强度等级"、"温度范围"）
-   - 行业标准术语（如"国家标准"、"行业规范"）
-
-2. **具体实体类型** (EntityType)：
-   - 设备和组件的类别（如"起重机"、"传感器"，而非"某型号起重机"）
-   - 材料和物质的类型（如"钢材"、"混凝土"，而非"C30混凝土"）
-   - 组织机构类型（如"施工单位"、"监理单位"）
-   - 地理位置类型（如"施工现场"、"作业区域"）
-
-3. **事件类型** (EventType)：
-   - 标准化的活动类型（如"质量检测"、"安全检查"）
-   - 工程阶段和里程碑（如"竣工验收"、"开工仪式"）
-
-### 什么不应该作为实体：
-❌ **避免提取以下内容**：
-1. **具体的措施描述**：如"加强机械设备的保护措施"、"避免因天气过冷造成非正常运转问题"
-2. **详细的操作步骤**：如"先检查设备状态再启动"、"按照规定程序进行操作"
-3. **具体的数值和参数**：如"温度不低于5度"、"强度达到C30标准"
-4. **完整的句子描述**：如"确保施工质量符合要求"、"提高工作效率和安全性"
-5. **过于具体的实例**：如"2024年春季检修计划"、"某工地的安全事故"
-6. **复合性描述**：包含多个概念的长句子或段落
-7. **动作+对象的组合**：如"防水板安装"、"设备维护"、"质量检测" - 应该分离为实体和关系
-8. **工艺+材料的组合**：如"混凝土浇筑"、"钢筋焊接" - 应该分离为材料实体和工艺关系
-
-### 实体与关系的正确区分：
-
-**核心原则**：实体应该是**名词性概念**，关系应该是**动词性概念**
-
-✅ **正确的实体-关系分离**：
-- "防水板安装" → 实体：WaterproofBoard（防水板），关系：installedBy/installsOn
-- "设备维护" → 实体：Equipment（设备），关系：maintainedBy/maintains  
-- "质量检测" → 实体：Equipment（设备），关系：inspectedBy/inspects
-- "混凝土浇筑" → 实体：Concrete（混凝土），关系：pouredBy/pours
-- "钢筋焊接" → 实体：Rebar（钢筋），关系：weldedBy/welds
-
-❌ **错误做法**：
-- WaterproofBoardInstallation（防水板安装）- 应分离为WaterproofBoard + installation关系
-- EquipmentMaintenance（设备维护）- 应分离为Equipment + maintenance关系
-- ConcretePouring（混凝土浇筑）- 应分离为Concrete + pouring关系
-
-### 实体命名原则：
-✅ **正确示例**：
-- WaterproofBoard（防水板）
-- Equipment（设备）
-- Concrete（混凝土）
-- Rebar（钢筋）
-- QualityControl（质量控制）
-- ConstructionMaterial（建筑材料）
-
-❌ **错误示例**：
-- WaterproofBoardInstallation（防水板安装）
-- EquipmentMaintenance（设备维护）
-- EquipmentProtectionMeasuresForColdWeather（天气寒冷时的设备保护措施）
-- DetailedOperationProcedureForSafetyCheck（安全检查的详细操作程序）
-
-## 任务要求
-
-请严格按照上述标准，从文档中提取以下类型的**标准化、抽象化**实体：
-
-### 重要提醒：实体与关系分离
-⚠️ **关键原则**：遇到"动作+对象"或"工艺+材料"的组合时，请分离为：
-- **实体**：提取名词性的对象（如：防水板、设备、混凝土）
-- **关系**：在实体的relations中定义动作关系（如：installedBy、maintainedBy、pouredBy）
-
-### 实体类型分类：
-1. **材料和物质类型** (EntityType)：如WaterproofBoard（防水板）、Concrete（混凝土）、Rebar（钢筋）
-2. **设备和组件类别** (EntityType)：如Equipment（设备）、Machinery（机械）、Tool（工具）
-3. **工程概念和术语** (ConceptType)：如QualityControl（质量控制）、SafetyManagement（安全管理）
-4. **工艺和流程类型** (ConceptType)：如WeldingProcess（焊接工艺）、InstallationProcess（安装工艺）
-5. **标准和规范类型** (EntityType)：如TechnicalStandard（技术标准）、SafetyRegulation（安全规范）
-6. **人员和组织类型** (EntityType)：如Constructor（施工人员）、SupervisorUnit（监理单位）
-7. **地理位置类型** (EntityType)：如ConstructionSite（施工现场）、WorkArea（作业区域）
-8. **时间和日期类型** (EntityType)：如ConstructionPeriod（施工期）、InspectionDate（检查日期）
-9. **数值和参数类别** (ConceptType)：如StrengthGrade（强度等级）、TemperatureRange（温度范围）
-10. **事件和活动类型** (EventType)：如QualityInspection（质量检查）、SafetyAccident（安全事故）
-11. **其他专业概念类型** (ConceptType)：根据具体领域确定
-
-对于每个实体，请提供以下信息：
-- name: 实体英文名称（首字母大写，驼峰命名，只含字母数字），依照实体中文名称转换为英文名称，如"隧道施工"转换为"TunnelConstruction"
-- chinese_name: 实体中文名称,必须从文档中提取（简洁的标准术语）
-- description: 实体描述
-- entity_type: OpenSPG实体类型（EntityType/ConceptType/EventType）
-- properties: 相关属性（符合OpenSPG属性定义标准）
-- relations: 与其他实体的关系（符合OpenSPG关系定义标准）
-
-
-所有识别的实体返回结果必须要包含在一个 json 块中，JSON对象的key即为实体的英文名称：
-{{
-    "ConceptEnglishName":{{
-        "chinese_name": "概念中文名称",
-        "entity_type": "ConceptType"
-    }},
-    "EntityEnglishName":{{
-        "chinese_name": "实体中文名称",
-        "description": "实体中文描述",
-        "entity_type": "EntityType",
-        "properties": {{
-            "propertyName": {{
-                "name": "propertyName(属性中文名)",
-                "type": "Text|Float|Integer|STD.Date|STD.Email等"
-            }}
-        }},
-        "relations": {{
-            "relationName": {{
-                "name": "relationName(关系中文名)",
-                "target": "目标实体英文名称",
-                "target_chinese_name": "目标实体中文名称"
-            }}
-        }}
-    }},
-    "EventEnglishName":{{
-        "chinese_name": "事件中文名称",
-        "description": "事件中文描述",
-        "entity_type": "EventType",
-        "properties": {{
-            "subject": {{
-                "target": "事件的主体实体的英文名称"
-            }}
-        }}
-    }}
-}}
-
-## 重要注意事项
-
-1. **实体抽象性要求**：
-   - ⚠️ **严格避免**：提取具体的措施描述、操作步骤、详细说明作为实体
-   - ✅ **正确做法**：只提取可复用的、标准化的概念和类型
-   - 实体应该是**类别**而非**实例**，是**概念**而非**描述**
-   - 如果一段文字是完整句子或包含动词，通常不适合作为实体
-
-2. **命名规范**：
-   - 英文名称：首字母大写，驼峰命名，如"Equipment"、"QualityControl"
-   - 属性名称：首字母小写，如"materialType"、"constructionDate"
-   - 避免使用拼音、数字开头、特殊字符
-   - **避免过长的复合名称**：如"EquipmentProtectionMeasures"应简化为"EquipmentProtection"
-
-3. **类型选择和输出格式**：
-   - EntityType: 具体物理实体类别（设备类、材料类、人员类、组织类等）- 使用完整格式
-   - ConceptType: 抽象概念类别（术语类、工艺类、参数类等）- 使用简化格式，只需english_name、chinese_name和entity_type
-   - EventType: 事件和活动类别（施工类、检测类、验收类等）- 使用完整格式，**必须定义主体subject属性**
-
-4. **属性类型**：
-   - 优先使用基本类型：Text、Integer、Float
-   - 特殊情况使用标准类型：STD.Date、STD.Email等
-   - 关系属性只能使用基本类型
-
-5. **EventType特殊要求**：
-   - EventType必须定义subject属性，指定事件的主体实体
-   - subject属性的type应该是具体的实体类型名称（如Company、Person、Equipment等）
-   - 示例：CompanyRiskEvent的subject为Company，表示公司风险事件的主体是公司
-
-6. **依赖顺序**：
-   - 确保被引用的实体类型在引用它的实体之前定义
-   - 属性中使用的自定义类型需要先定义
-
-7. **提取原则**：
-   - 只提取文档中明确提到的**核心概念**，而非具体描述
-   - 优先提取可在多个场景复用的通用概念
-   - 如果无法确定是否应该提取，倾向于**不提取**
-   - 如果文档中没有明确的标准化实体概念，返回空数组 []
-
-8. **质量检查**：
-   - 提取完成后，检查每个实体是否为**可复用的概念类型**
-   - 确保实体名称简洁、通用，避免包含具体的措施或描述
-   - 确保生成的Schema能够直接用于OpenSPG系统
+要求：
+1. 直接返回OpenSPG Schema格式，不要JSON包装
+2. 实体名使用英文PascalCase，中文名放在括号内
+3. 属性名使用camelCase，类型为Text/Integer/Float
+4. 关系指向其他实体类型
+5. 只提取核心的、有意义的实体
 """
             }
         ]
