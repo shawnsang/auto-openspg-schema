@@ -3,14 +3,47 @@ import os
 from typing import List, Dict, Any
 import json
 from datetime import datetime
+import time
+import zipfile
+import shutil
 
-# 导入自定义模块
 from src.document_processor import DocumentProcessor
 from src.schema_generator import SchemaGenerator
 from src.schema_manager import SchemaManager
 from src.llm_client import LLMClient
 from src.logger import logger
 from src.chunk_logger import ChunkLogger
+
+def create_zip_archive(source_dirs: List[str], zip_filename: str) -> str:
+    """创建包含多个目录的zip压缩包
+    
+    Args:
+        source_dirs: 要压缩的目录列表
+        zip_filename: 输出的zip文件名
+        
+    Returns:
+        str: 创建的zip文件路径
+    """
+    try:
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for source_dir in source_dirs:
+                if os.path.exists(source_dir):
+                    # 获取目录名作为zip内的根目录
+                    dir_name = os.path.basename(source_dir)
+                    
+                    # 遍历目录中的所有文件
+                    for root, dirs, files in os.walk(source_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            # 计算在zip中的相对路径
+                            arcname = os.path.join(dir_name, os.path.relpath(file_path, source_dir))
+                            zipf.write(file_path, arcname)
+                            
+        logger.info(f"成功创建zip文件: {zip_filename}")
+        return zip_filename
+    except Exception as e:
+        logger.error(f"创建zip文件失败: {str(e)}")
+        raise
 
 def main():
     st.set_page_config(
@@ -665,6 +698,64 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             file_name=f"chunk_processing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
             mime="text/plain"
         )
+    
+    # 创建并提供zip文件下载
+    if st.session_state.processing_results:
+        st.subheader("📦 打包下载")
+        
+        # 收集所有输出目录
+        output_dirs = []
+        for result in st.session_state.processing_results:
+            if 'output_dir' in result and os.path.exists(result['output_dir']):
+                output_dirs.append(result['output_dir'])
+        
+        if output_dirs:
+            # 创建zip文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            zip_filename = f"extracted_entities_{timestamp}.zip"
+            
+            try:
+                # 显示打包进度
+                with st.spinner("正在打包文件..."):
+                    zip_path = create_zip_archive(output_dirs, zip_filename)
+                
+                # 读取zip文件内容用于下载
+                with open(zip_path, 'rb') as f:
+                    zip_data = f.read()
+                
+                # 提供下载按钮
+                st.success(f"✅ 打包完成！文件大小: {len(zip_data) / 1024 / 1024:.2f} MB")
+                st.download_button(
+                    label="📥 下载提取结果压缩包",
+                    data=zip_data,
+                    file_name=zip_filename,
+                    mime="application/zip",
+                    help="包含所有文档的分块文件和Schema定义"
+                )
+                
+                # 显示zip文件内容预览
+                with st.expander("📋 压缩包内容预览", expanded=False):
+                    st.text("压缩包包含以下目录和文件:")
+                    for output_dir in output_dirs:
+                        dir_name = os.path.basename(output_dir)
+                        st.text(f"📁 {dir_name}/")
+                        if os.path.exists(output_dir):
+                            for root, dirs, files in os.walk(output_dir):
+                                level = root.replace(output_dir, '').count(os.sep)
+                                indent = '  ' * (level + 1)
+                                subdir = os.path.basename(root)
+                                if subdir:
+                                    st.text(f"{indent}📁 {subdir}/")
+                                subindent = '  ' * (level + 2)
+                                for file in files:
+                                    st.text(f"{subindent}📄 {file}")
+                
+                # 清理临时zip文件（可选，也可以保留供后续使用）
+                # os.remove(zip_path)
+                
+            except Exception as e:
+                st.error(f"打包文件时出错: {str(e)}")
+                logger.error(f"创建zip文件失败: {str(e)}", exc_info=True)
     
     st.rerun()
 
