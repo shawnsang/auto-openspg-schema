@@ -14,8 +14,84 @@ from src.llm_client import LLMClient
 from src.logger import logger
 from src.chunk_logger import ChunkLogger
 
+def collect_all_chunks_text(source_dirs: List[str]) -> str:
+    """收集所有目录中的分块文本并合并为一个文件内容
+    
+    Args:
+        source_dirs: 包含分块文件的目录列表
+        
+    Returns:
+        str: 合并后的所有分块文本内容
+    """
+    all_chunks_content = []
+    
+    for source_dir in source_dirs:
+        chunks_dir = os.path.join(source_dir, 'chunks')
+        if os.path.exists(chunks_dir):
+            # 获取文档名称
+            doc_name = os.path.basename(source_dir)
+            all_chunks_content.append(f"\n{'='*80}\n文档: {doc_name}\n{'='*80}\n")
+            
+            # 获取所有chunk文件并排序
+            chunk_files = [f for f in os.listdir(chunks_dir) if f.startswith('chunk_') and f.endswith('.txt')]
+            chunk_files.sort()
+            
+            for chunk_file in chunk_files:
+                chunk_path = os.path.join(chunks_dir, chunk_file)
+                try:
+                    with open(chunk_path, 'r', encoding='utf-8') as f:
+                        chunk_content = f.read().strip()
+                    
+                    all_chunks_content.append(f"\n--- {chunk_file} ---\n")
+                    all_chunks_content.append(chunk_content)
+                    all_chunks_content.append("\n")
+                except Exception as e:
+                    logger.error(f"读取分块文件失败 {chunk_path}: {str(e)}")
+                    all_chunks_content.append(f"\n--- {chunk_file} (读取失败) ---\n")
+                    all_chunks_content.append(f"错误: {str(e)}\n")
+    
+    return ''.join(all_chunks_content)
+
+def collect_all_schemas_text(source_dirs: List[str]) -> str:
+    """收集所有目录中的schema文本并合并为一个文件内容
+    
+    Args:
+        source_dirs: 包含schema文件的目录列表
+        
+    Returns:
+        str: 合并后的所有schema文本内容
+    """
+    all_schemas_content = []
+    
+    for source_dir in source_dirs:
+        schemas_dir = os.path.join(source_dir, 'schemas')
+        if os.path.exists(schemas_dir):
+            # 获取文档名称
+            doc_name = os.path.basename(source_dir)
+            all_schemas_content.append(f"\n{'='*80}\n文档: {doc_name}\n{'='*80}\n")
+            
+            # 获取所有schema文件并排序
+            schema_files = [f for f in os.listdir(schemas_dir) if f.startswith('schema_') and f.endswith('.txt')]
+            schema_files.sort()
+            
+            for schema_file in schema_files:
+                schema_path = os.path.join(schemas_dir, schema_file)
+                try:
+                    with open(schema_path, 'r', encoding='utf-8') as f:
+                        schema_content = f.read().strip()
+                    
+                    all_schemas_content.append(f"\n--- {schema_file} ---\n")
+                    all_schemas_content.append(schema_content)
+                    all_schemas_content.append("\n")
+                except Exception as e:
+                    logger.error(f"读取schema文件失败 {schema_path}: {str(e)}")
+                    all_schemas_content.append(f"\n--- {schema_file} (读取失败) ---\n")
+                    all_schemas_content.append(f"错误: {str(e)}\n")
+    
+    return ''.join(all_schemas_content)
+
 def create_zip_archive(source_dirs: List[str], zip_filename: str) -> str:
-    """创建包含多个目录的zip压缩包
+    """创建包含核心文件的zip压缩包，只包含chunks和schemas文件夹内容
     
     Args:
         source_dirs: 要压缩的目录列表
@@ -26,18 +102,47 @@ def create_zip_archive(source_dirs: List[str], zip_filename: str) -> str:
     """
     try:
         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for source_dir in source_dirs:
+            # 只添加核心文件，不包含外层目录结构
+            for i, source_dir in enumerate(source_dirs):
                 if os.path.exists(source_dir):
-                    # 获取目录名作为zip内的根目录
-                    dir_name = os.path.basename(source_dir)
+                    doc_name = os.path.basename(source_dir)
                     
-                    # 遍历目录中的所有文件
-                    for root, dirs, files in os.walk(source_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            # 计算在zip中的相对路径
-                            arcname = os.path.join(dir_name, os.path.relpath(file_path, source_dir))
-                            zipf.write(file_path, arcname)
+                    # 添加处理汇总报告
+                    summary_file = os.path.join(source_dir, 'processing_summary.txt')
+                    if os.path.exists(summary_file):
+                        zipf.write(summary_file, f'{doc_name}_processing_summary.txt')
+                    
+                    # 添加chunks文件夹中的文件
+                    chunks_dir = os.path.join(source_dir, 'chunks')
+                    if os.path.exists(chunks_dir):
+                        for file in os.listdir(chunks_dir):
+                            if file.endswith('.txt'):
+                                file_path = os.path.join(chunks_dir, file)
+                                # 使用文档名前缀避免文件名冲突
+                                arcname = f'chunks/{doc_name}_{file}'
+                                zipf.write(file_path, arcname)
+                    
+                    # 添加schemas文件夹中的文件
+                    schemas_dir = os.path.join(source_dir, 'schemas')
+                    if os.path.exists(schemas_dir):
+                        for file in os.listdir(schemas_dir):
+                            if file.endswith('.txt'):
+                                file_path = os.path.join(schemas_dir, file)
+                                # 使用文档名前缀避免文件名冲突
+                                arcname = f'schemas/{doc_name}_{file}'
+                                zipf.write(file_path, arcname)
+            
+            # 添加合并的分块文本文件
+            all_chunks_text = collect_all_chunks_text(source_dirs)
+            if all_chunks_text.strip():
+                zipf.writestr('所有分块文本.txt', all_chunks_text)
+                logger.info("已添加合并的分块文本文件到zip包")
+            
+            # 添加合并的schema文本文件
+            all_schemas_text = collect_all_schemas_text(source_dirs)
+            if all_schemas_text.strip():
+                zipf.writestr('所有Schema文本.txt', all_schemas_text)
+                logger.info("已添加合并的schema文本文件到zip包")
                             
         logger.info(f"成功创建zip文件: {zip_filename}")
         return zip_filename
@@ -86,7 +191,7 @@ def main():
             )
             model_name = st.text_input(
                 "模型名称",
-                value="gpt-4",
+                value="deepseek-chat",
                 help="输入模型名称，如 gpt-4, gpt-3.5-turbo, claude-3-sonnet 等"
             )
         else:  # Ollama
@@ -104,8 +209,8 @@ def main():
         
         # 文档处理配置
         st.subheader("文档处理设置")
-        chunk_size = st.slider("文档分块大小", 200, 1000, 500)
-        chunk_overlap = st.slider("分块重叠大小", 20, 100, 50)
+        chunk_size = st.slider("文档分块大小", 200, 2000, 500)
+        chunk_overlap = st.slider("分块重叠大小", 0, 100, 0)
         
         # Markdown 处理选项
         enable_markdown_semantic = st.checkbox(
@@ -124,37 +229,24 @@ def main():
     if 'schema_manager' not in st.session_state:
         st.session_state.schema_manager = SchemaManager(namespace)
     
+    # 只在真正需要时初始化processing_results，避免意外清空
     if 'processing_results' not in st.session_state:
         st.session_state.processing_results = []
+        logger.debug("初始化 processing_results 为空列表")
+    else:
+        logger.debug(f"processing_results 已存在，包含 {len(st.session_state.processing_results)} 个结果")
     
     if 'document_chunks' not in st.session_state:
         st.session_state.document_chunks = []
     
-    # 创建Tab布局
-    tab1, tab2 = st.tabs(["📄 文档处理", "📊 分块与实体"])
-    
-    with tab1:
-        show_document_processing_tab(provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise, enable_markdown_semantic)
-    
-    with tab2:
-        show_chunks_and_entities_tab()
+    # 文档处理界面
+    show_document_processing_tab(provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise, enable_markdown_semantic)
 
 def show_document_processing_tab(provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise, enable_markdown_semantic):
     """显示文档处理tab的内容"""
     st.header("📄 文档上传")
     
-    # 分批处理提示
-    st.info(
-        "💡 **分批处理模式**: 您可以分多次上传文档，每次处理后 Schema 会自动累积更新。"
-        "支持保存和加载 Schema 文件，便于长期项目的逐步完善。"
-    )
-    
-    # Markdown 文档特殊说明
-    st.info(
-        "📝 **Markdown 文档优化**: 对于 Markdown 文档，系统会进行语义分块处理，"
-        "特别优化表格内容的完整性，有助于更准确地提取实体和关系信息。"
-    )
-    
+   
     uploaded_files = st.file_uploader(
         "选择文档文件",
         type=["pdf", "docx", "txt", "md", "markdown"],
@@ -162,12 +254,13 @@ def show_document_processing_tab(provider, api_key, model_name, base_url, chunk_
         help="支持批量上传，可分多次处理不同的文档集合。支持格式：PDF、Word文档、文本文件、Markdown文档"
     )
     
-    # 添加跳过文档处理的选项
-    skip_document_processing = st.checkbox(
-        "🔧 跳过文档处理，直接进行关系验证",
-        value=False,
-        help="勾选此选项将跳过文档分析和实体提取，直接对当前Schema进行关系验证和优化"
-    )
+    # TODO: 添加跳过文档处理的选项 (功能暂时禁用)
+    # skip_document_processing = st.checkbox(
+    #     "🔧 跳过文档处理，直接进行关系验证",
+    #     value=False,
+    #     help="勾选此选项将跳过文档分析和实体提取，直接对当前Schema进行关系验证和优化"
+    # )
+    skip_document_processing = False  # 暂时禁用此功能
     
     if uploaded_files:
         st.success(f"已上传 {len(uploaded_files)} 个文件")
@@ -181,18 +274,7 @@ def show_document_processing_tab(provider, api_key, model_name, base_url, chunk_
                 "您可以先处理部分文件，保存 Schema 后再继续处理其余文件。"
             )
     
-    st.header("🎯 当前 Schema")
-    
-    # 显示当前 schema 统计
-    stats = st.session_state.schema_manager.get_statistics()
-    col2_1, col2_2, col2_3 = st.columns(3)
-    with col2_1:
-        st.metric("实体类型", stats['entity_count'])
-    with col2_2:
-        st.metric("属性总数", stats['property_count'])
-    with col2_3:
-        st.metric("已处理文档", len(st.session_state.processing_results))
-    
+        
     # 处理按钮
     st.markdown("---")
     
@@ -255,123 +337,9 @@ def show_document_processing_tab(provider, api_key, model_name, base_url, chunk_
                 with col_r3:
                     st.metric("处理时间", result['timestamp'])
     
-    # Schema 文本下载
-    st.markdown("---")
-    st.header("📥 Schema 文本下载")
-    
-    if st.session_state.document_chunks:
-        st.info("💡 文档已处理完成，可以下载提取的Schema文本")
-        
-        # 合并所有Schema文本
-        all_schema_text = "\n\n".join([
-            f"# 文件: {chunk['filename']} - 分块 {chunk['chunk_index'] + 1}\n{chunk['schema_text']}"
-            for chunk in st.session_state.document_chunks
-            if chunk.get('schema_text')
-        ])
-        
-        if all_schema_text:
-            # 下载按钮
-            st.download_button(
-                label="💾 下载所有Schema文本",
-                data=all_schema_text,
-                file_name=f"extracted_schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
-            
-            # 预览选项
-            with st.expander("👁️ 预览Schema文本", expanded=False):
-                st.code(all_schema_text, language="text")
-        else:
-            st.warning("⚠️ 没有提取到Schema文本")
-        
-        # 清空按钮
-        if st.button("🗑️ 清空处理结果", type="secondary"):
-            st.session_state.processing_results = []
-            st.session_state.document_chunks = []
-            st.rerun()
-        
-        # 显示统计信息
-        st.markdown("---")
-        st.subheader("📊 统计信息")
-        total_chunks = len(st.session_state.document_chunks)
-        total_files = len(set(chunk['filename'] for chunk in st.session_state.document_chunks))
-        st.metric("处理文件数", total_files)
-        st.metric("总分块数", total_chunks)
-    else:
-        # 当没有处理结果时的提示
-        st.info("📝 还没有处理过文档，请先上传文档并点击'开始处理文档'按钮")
-        st.markdown(
-            """
-            **使用步骤：**
-            1. 📄 上传文档文件（支持 PDF、DOCX、TXT、MD 格式）
-            2. ⚙️ 在侧边栏配置 LLM 设置
-            3. 🚀 点击"开始处理文档"按钮
-            4. 📥 处理完成后在此处下载提取的Schema文本
-            """
-        )
 
-def show_chunks_and_entities_tab():
-    """显示分块与实体tab的内容"""
-    st.header("📊 文档分块与实体定义")
-    
-    if not st.session_state.document_chunks:
-        st.info("📝 还没有处理过的文档分块。请先在'文档处理'页面上传并处理文档。")
-        return
-    
-    # 显示处理进度和最新分块信息
-    col_info1, col_info2 = st.columns([1, 1])
-    with col_info1:
-        st.info(f"📄 已处理 {len(st.session_state.document_chunks)} 个文档分块")
-    with col_info2:
-        if st.session_state.document_chunks:
-            latest_chunk = st.session_state.document_chunks[-1]
-            st.success(f"🆕 最新: {latest_chunk['filename']} 分块 {latest_chunk['chunk_index'] + 1}")
-    
-    # 创建左右两列布局
-    col_left, col_right = st.columns([1, 1])
-    
-    with col_left:
-        st.subheader("📄 文档分块")
-        
-        # 创建分块选择器
-        chunk_options = [f"分块 {i+1} ({chunk['filename']})" for i, chunk in enumerate(st.session_state.document_chunks)]
-        selected_chunk_index = st.selectbox(
-            "选择要查看的分块",
-            range(len(chunk_options)),
-            format_func=lambda x: chunk_options[x]
-        )
-        
-        if selected_chunk_index is not None:
-            selected_chunk = st.session_state.document_chunks[selected_chunk_index]
-            
-            # 显示分块信息
-            st.write(f"**文件名**: {selected_chunk['filename']}")
-            st.write(f"**分块大小**: {len(selected_chunk['content'])} 字符")
-            st.write(f"**分块索引**: {selected_chunk['chunk_index'] + 1}/{selected_chunk['total_chunks']}")
-            
-            # 显示分块内容
-            with st.expander("查看分块内容", expanded=True):
-                st.text_area(
-                    "分块内容",
-                    value=selected_chunk['content'],
-                    height=400,
-                    disabled=True
-                )
-    
-    with col_right:
-        st.subheader("🏷️ 实体定义 (OpenSPG Schema)")
-        
-        if selected_chunk_index is not None:
-            selected_chunk = st.session_state.document_chunks[selected_chunk_index]
-            
-            if 'schema_text' in selected_chunk and selected_chunk['schema_text']:
-                st.write(f"**从此分块提取的实体定义**")
-                
-                # 显示原始的Schema文本
-                st.code(selected_chunk['schema_text'], language='text')
-            else:
-                st.info("此分块没有提取到实体定义")
+
+
 
 def process_documents(uploaded_files, provider, api_key, model_name, base_url, chunk_size, chunk_overlap, namespace, domain_expertise="", enable_markdown_semantic=True):
     """处理上传的文档"""
@@ -628,6 +596,9 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             st.session_state.processing_results.append(result)
             logger.success(f"文件 {uploaded_file.name} 处理完成，生成了 {len(chunks)} 个分块的Schema定义")
             
+            # 确保session state被正确更新
+            logger.debug(f"当前 processing_results 包含 {len(st.session_state.processing_results)} 个结果")
+            
             # 清理临时文件
             logger.debug(f"清理临时文件: {temp_path}")
             os.remove(temp_path)
@@ -699,16 +670,25 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             mime="text/plain"
         )
     
-    # 创建并提供zip文件下载
+    # 创建并提供zip文件下载 - 始终显示下载区域
+    st.subheader("📦 打包下载")
+    
     if st.session_state.processing_results:
-        st.subheader("📦 打包下载")
+        logger.debug(f"准备显示下载区域，processing_results 包含 {len(st.session_state.processing_results)} 个结果")
         
         # 收集所有输出目录
         output_dirs = []
         for result in st.session_state.processing_results:
-            if 'output_dir' in result and os.path.exists(result['output_dir']):
-                output_dirs.append(result['output_dir'])
+            if 'output_dir' in result:
+                if os.path.exists(result['output_dir']):
+                    output_dirs.append(result['output_dir'])
+                    logger.debug(f"添加输出目录: {result['output_dir']}")
+                else:
+                    logger.warning(f"输出目录不存在: {result['output_dir']}")
+            else:
+                logger.warning(f"处理结果缺少 output_dir 字段: {result}")
         
+        logger.debug(f"收集到 {len(output_dirs)} 个有效输出目录")
         if output_dirs:
             # 创建zip文件名
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -723,32 +703,79 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 with open(zip_path, 'rb') as f:
                     zip_data = f.read()
                 
-                # 提供下载按钮
+                # 提供单独的文本文件下载
+                st.subheader("📄 单独下载文本文件")
+                
+                # 生成合并的分块文本
+                all_chunks_text = collect_all_chunks_text(output_dirs)
+                if all_chunks_text.strip():
+                    st.download_button(
+                        label="📥 下载所有分块文本",
+                        data=all_chunks_text,
+                        file_name=f"所有分块文本_{timestamp}.txt",
+                        mime="text/plain",
+                        help="包含所有文档的分块内容，按文档和分块顺序排列"
+                    )
+                
+                # 生成合并的schema文本
+                all_schemas_text = collect_all_schemas_text(output_dirs)
+                if all_schemas_text.strip():
+                    st.download_button(
+                        label="📥 下载所有Schema文本",
+                        data=all_schemas_text,
+                        file_name=f"所有Schema文本_{timestamp}.txt",
+                        mime="text/plain",
+                        help="包含所有文档的Schema定义，按文档和分块顺序排列"
+                    )
+                
+                st.markdown("---")
+                
+                # 提供完整压缩包下载
+                st.subheader("📦 完整压缩包下载")
                 st.success(f"✅ 打包完成！文件大小: {len(zip_data) / 1024 / 1024:.2f} MB")
                 st.download_button(
-                    label="📥 下载提取结果压缩包",
+                    label="📥 下载完整压缩包",
                     data=zip_data,
                     file_name=zip_filename,
                     mime="application/zip",
-                    help="包含所有文档的分块文件和Schema定义"
+                    help="包含所有文档的分块文件、Schema定义，以及合并的分块文本和Schema文本"
                 )
                 
                 # 显示zip文件内容预览
                 with st.expander("📋 压缩包内容预览", expanded=False):
-                    st.text("压缩包包含以下目录和文件:")
+                    st.text("压缩包包含以下文件:")
+                    
+                    # 显示合并的文本文件
+                    st.text("📄 所有分块文本.txt  (所有文档的分块内容合并)")
+                    st.text("📄 所有Schema文本.txt  (所有文档的Schema定义合并)")
+                    st.text("")
+                    
+                    # 显示处理汇总报告
                     for output_dir in output_dirs:
-                        dir_name = os.path.basename(output_dir)
-                        st.text(f"📁 {dir_name}/")
-                        if os.path.exists(output_dir):
-                            for root, dirs, files in os.walk(output_dir):
-                                level = root.replace(output_dir, '').count(os.sep)
-                                indent = '  ' * (level + 1)
-                                subdir = os.path.basename(root)
-                                if subdir:
-                                    st.text(f"{indent}📁 {subdir}/")
-                                subindent = '  ' * (level + 2)
-                                for file in files:
-                                    st.text(f"{subindent}📄 {file}")
+                        doc_name = os.path.basename(output_dir)
+                        st.text(f"📄 {doc_name}_processing_summary.txt  (处理汇总报告)")
+                    st.text("")
+                    
+                    # 显示chunks目录
+                    st.text("📁 chunks/")
+                    for output_dir in output_dirs:
+                        doc_name = os.path.basename(output_dir)
+                        chunks_dir = os.path.join(output_dir, 'chunks')
+                        if os.path.exists(chunks_dir):
+                            chunk_files = [f for f in os.listdir(chunks_dir) if f.endswith('.txt')]
+                            for chunk_file in sorted(chunk_files):
+                                st.text(f"  📄 {doc_name}_{chunk_file}")
+                    st.text("")
+                    
+                    # 显示schemas目录
+                    st.text("📁 schemas/")
+                    for output_dir in output_dirs:
+                        doc_name = os.path.basename(output_dir)
+                        schemas_dir = os.path.join(output_dir, 'schemas')
+                        if os.path.exists(schemas_dir):
+                            schema_files = [f for f in os.listdir(schemas_dir) if f.endswith('.txt')]
+                            for schema_file in sorted(schema_files):
+                                st.text(f"  📄 {doc_name}_{schema_file}")
                 
                 # 清理临时zip文件（可选，也可以保留供后续使用）
                 # os.remove(zip_path)
@@ -756,8 +783,12 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             except Exception as e:
                 st.error(f"打包文件时出错: {str(e)}")
                 logger.error(f"创建zip文件失败: {str(e)}", exc_info=True)
-    
-    st.rerun()
+        else:
+            st.warning("⚠️ 没有找到有效的输出目录，无法创建下载包。请检查文件是否已正确处理。")
+            logger.warning("没有有效的输出目录可用于创建下载包")
+    else:
+        st.info("📝 请先上传并处理文档，然后就可以在这里下载处理结果了。")
+        logger.debug("processing_results 为空，显示提示信息")
 
 def display_validation_results(validation_result):
     """显示关系验证结果"""
