@@ -208,7 +208,7 @@ class LLMClient:
         
         self.model_name = model_name
     
-    def extract_entities_from_text(self, text: str, known_entities: Optional[List[str]] = None) -> str:
+    def extract_entities_from_text(self, text: str, known_entities: Optional[List[str]] = None, is_excel_data: bool = False) -> str:
         """从文本中提取实体信息，返回原始Schema格式文本
         
         Args:
@@ -237,7 +237,7 @@ class LLMClient:
                 logger.debug(f"已知实体列表: {', '.join(str(e) for e in known_entities[:10])}{'...' if len(known_entities) > 10 else ''}")
             logger.debug(f"输入文本: {text[:300]}{'...' if len(text) > 300 else ''}")
             
-            messages = self._create_entity_extraction_messages(text, known_entities)
+            messages = self._create_entity_extraction_messages(text, known_entities, is_excel_data)
             logger.debug(f"构建了 {len(messages)} 条消息用于实体提取")
             
             logger.debug("调用 LLM 进行实体提取")
@@ -304,7 +304,7 @@ class LLMClient:
             print(f"删除建议生成失败: {str(e)}")
             return []
     
-    def _create_entity_extraction_messages(self, text: str, known_entities: Optional[List[str]] = None) -> List[Dict[str, str]]:
+    def _create_entity_extraction_messages(self, text: str, known_entities: Optional[List[str]] = None, is_excel_data: bool = False) -> List[Dict[str, str]]:
         """创建实体提取的消息列表
         
         Args:
@@ -317,6 +317,19 @@ class LLMClient:
             system_content = f"你是一个专业的OpenSPG知识图谱构建专家，特别擅长{self.domain_expertise}领域的技术文档分析和结构化信息提取。你对{self.domain_expertise}的专业术语、概念、工艺流程、设备组件等有深入的理解，并能准确生成符合OpenSPG语法规范的Schema定义。"
         else:
             system_content = "你是一个专业的OpenSPG知识图谱构建专家，擅长从技术文档中提取结构化信息并生成符合OpenSPG语法规范的Schema定义。"
+        
+        # 根据是否为Excel数据添加特定指导
+        excel_instructions = ""
+        excel_requirements = "6. 确保提取的实体具有明确的语义和实际意义"
+        
+        if is_excel_data:
+            excel_instructions = """特别注意 - 如果文档来源是Excel表格数据：
+1. 文件名通常包含表名信息，表名应当作为一个实体类型，表中的列表头或者行表头代表实体的属性或分类维度
+2. 表格中的行数据包含实体实例和属性值
+3. 表格中的数值列可能对应Integer或Float类型的属性
+"""
+            excel_requirements = """6. 对于表格数据，重点关注实体的完整性和属性的准确性
+7. 确保提取的实体能够完整描述表格中的业务概念和数据结构"""
         
         return [
             {
@@ -344,12 +357,15 @@ Shotcrete(喷射混凝土): EntityType
         usedInInitialSupport(用于初期支护): InitialSupport
         appliedTo(应用于): TunnelSection
 
+{excel_instructions}
+
 要求：
 1. 直接返回OpenSPG Schema格式，不要JSON包装
 2. 实体名使用英文PascalCase，中文名放在括号内
 3. 属性名使用camelCase，类型为Text/Integer/Float
 4. 关系指向其他实体类型
 5. 只提取核心的、有意义的实体
+{excel_requirements}
 """
             }
         ]

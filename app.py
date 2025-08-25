@@ -13,6 +13,48 @@ from src.schema_manager import SchemaManager
 from src.llm_client import LLMClient
 from src.logger import logger
 from src.chunk_logger import ChunkLogger
+import gc
+import subprocess
+import platform
+
+def _safe_remove_file(file_path: str, max_retries: int = 3) -> bool:
+    """安全删除文件，包含重试机制"""
+    for attempt in range(max_retries):
+        try:
+            # 强制垃圾回收，释放可能的文件句柄
+            gc.collect()
+            time.sleep(0.1)  # 短暂等待
+            
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.debug(f"成功删除临时文件: {file_path}")
+                return True
+            else:
+                logger.debug(f"文件不存在，无需删除: {file_path}")
+                return True
+                
+        except PermissionError as e:
+            logger.warning(f"删除文件失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(0.5)  # 等待更长时间
+            else:
+                # 最后一次尝试：在Windows上使用系统命令强制删除
+                if platform.system() == "Windows":
+                    try:
+                        subprocess.run(["del", "/f", file_path], shell=True, check=True, capture_output=True)
+                        logger.info(f"使用系统命令强制删除文件: {file_path}")
+                        return True
+                    except subprocess.CalledProcessError:
+                        logger.error(f"无法删除临时文件: {file_path}，请手动删除")
+                        return False
+                else:
+                    logger.error(f"无法删除临时文件: {file_path}，请手动删除")
+                    return False
+        except Exception as e:
+            logger.error(f"删除文件时发生未知错误: {str(e)}")
+            return False
+    
+    return False
 
 def collect_all_chunks_text(source_dirs: List[str]) -> str:
     """收集所有目录中的分块文本并合并为一个文件内容
@@ -249,9 +291,9 @@ def show_document_processing_tab(provider, api_key, model_name, base_url, chunk_
    
     uploaded_files = st.file_uploader(
         "选择文档文件",
-        type=["pdf", "docx", "txt", "md", "markdown"],
+        type=["pdf", "docx", "txt", "md", "markdown", "xlsx", "xls"],
         accept_multiple_files=True,
-        help="支持批量上传，可分多次处理不同的文档集合。支持格式：PDF、Word文档、文本文件、Markdown文档"
+        help="支持批量上传，可分多次处理不同的文档集合。支持格式：PDF、Word文档、文本文件、Markdown文档、Excel表格"
     )
     
     # TODO: 添加跳过文档处理的选项 (功能暂时禁用)
@@ -418,6 +460,7 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
         status_text.text(f"正在处理: {uploaded_file.name}")
         current_file_text.text(f"📁 当前文件: {uploaded_file.name} ({i + 1}/{len(uploaded_files)})")
         
+        temp_path = None
         try:
             # 保存临时文件
             temp_path = f"temp_{uploaded_file.name}"
@@ -478,7 +521,7 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
                 chunk_logger.log_chunk_content(chunk, chunk_idx)
                 
                 # 提取Schema文本
-                schema_text = llm_client.extract_entities_from_text(chunk, [])
+                schema_text = schema_generator.extract_entities_from_chunk(chunk, [])
                 logger.debug(f"从分块 {chunk_idx + 1} 提取到Schema文本长度: {len(schema_text)} 字符")
                 
                 # 显示LLM响应
@@ -600,8 +643,9 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             logger.debug(f"当前 processing_results 包含 {len(st.session_state.processing_results)} 个结果")
             
             # 清理临时文件
-            logger.debug(f"清理临时文件: {temp_path}")
-            os.remove(temp_path)
+            if temp_path and os.path.exists(temp_path):
+                logger.debug(f"清理临时文件: {temp_path}")
+                _safe_remove_file(temp_path)
             
         except Exception as e:
             error_msg = f"处理文档 {uploaded_file.name} 时出错: {str(e)}"
@@ -609,10 +653,9 @@ def process_documents(uploaded_files, provider, api_key, model_name, base_url, c
             st.error(error_msg)
             
             # 清理可能存在的临时文件
-            temp_path = f"temp_{uploaded_file.name}"
-            if os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
                 logger.debug(f"清理错误处理中的临时文件: {temp_path}")
-                os.remove(temp_path)
+                _safe_remove_file(temp_path)
         
         # 更新进度
         progress_bar.progress((i + 1) / len(uploaded_files))

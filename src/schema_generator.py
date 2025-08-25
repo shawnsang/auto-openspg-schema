@@ -63,15 +63,27 @@ class SchemaGenerator:
             str: 原始的OpenSPG Schema格式文本
         """
         chunk_content = chunk.get('content', '')
+        source_file = chunk.get('source_file', '')
         logger.info(f"开始从文档块提取实体，内容长度: {len(chunk_content)} 字符")
         if known_entities:
             logger.info(f"传入已知实体数量: {len(known_entities)}")
             logger.debug(f"已知实体列表: {', '.join(known_entities[:10])}{'...' if len(known_entities) > 10 else ''}")
         logger.debug(f"文档块内容预览: {chunk_content[:200]}{'...' if len(chunk_content) > 200 else ''}")
         
-        # 使用 LLM 提取实体（传递已知实体列表）
+        # 检查是否为Excel数据
+        is_excel_data = chunk.get('is_excel_data', False)
+        if is_excel_data:
+            logger.debug("检测到Excel数据，将使用Excel特定的提示词")
+        
+        # 构建包含文件名的上下文
+        context_with_filename = chunk_content
+        if source_file:
+            context_with_filename = f"文件名: {source_file}\n\n{chunk_content}"
+            logger.debug(f"添加文件名上下文: {source_file}")
+        
+        # 使用 LLM 提取实体（传递包含文件名的上下文、已知实体列表和Excel数据标识）
         logger.debug("调用 LLM 客户端提取实体Schema")
-        schema_text = self.llm_client.extract_entities_from_text(chunk_content, known_entities)
+        schema_text = self.llm_client.extract_entities_from_text(context_with_filename, known_entities, is_excel_data)
         logger.info(f"LLM 返回Schema文本长度: {len(schema_text)} 字符")
         logger.debug(f"Schema文本预览: {schema_text[:200]}{'...' if len(schema_text) > 200 else ''}")
         

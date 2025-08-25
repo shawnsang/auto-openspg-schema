@@ -33,6 +33,13 @@ except ImportError:
     Document = None
     logger.warning("python-docx 库未安装，DOCX 处理功能不可用")
 
+try:
+    import pandas as pd
+    logger.success("pandas 库加载成功")
+except ImportError:
+    pd = None
+    logger.warning("pandas 库未安装，Excel 处理功能不可用")
+
 class DocumentProcessor:
     """文档处理器，支持多种格式的文档读取和分块"""
     
@@ -115,6 +122,9 @@ class DocumentProcessor:
             elif file_ext in ['.md', '.markdown', '.mdown', '.mkd']:
                 logger.info("使用 TXT 提取器处理 Markdown 文档（传统模式）")
                 text = self._extract_text_from_txt(file_path)
+            elif file_ext in ['.xlsx', '.xls']:
+                logger.info("使用 Excel 提取器处理文档")
+                text = self._extract_text_from_excel(file_path)
             else:
                 logger.error(f"不支持的文件格式: {file_ext}")
                 raise ValueError(f"不支持的文件格式: {file_ext}")
@@ -133,12 +143,15 @@ class DocumentProcessor:
             
             # 返回结构化的分块数据
             results = []
+            is_excel = file_ext in ['.xlsx', '.xls']
             for i, chunk in enumerate(chunks):
                 results.append({
                     'content': chunk,
                     'chunk_id': i,
                     'source_file': os.path.basename(file_path),
-                    'char_count': len(chunk)
+                    'char_count': len(chunk),
+                    'file_type': file_ext,
+                    'is_excel_data': is_excel
                 })
                 logger.debug(f"分块 {i+1}: {len(chunk)} 字符")
             
@@ -321,6 +334,82 @@ class DocumentProcessor:
             logger.error(f"TXT 文本提取失败: {str(e)}")
             raise Exception(f"TXT 文件读取失败: {str(e)}")
     
+    def _extract_text_from_excel(self, file_path: str) -> str:
+        """从 Excel 文件提取文本"""
+        if pd is None:
+            logger.error("pandas 库未安装，无法处理 Excel 文件")
+            raise ImportError("pandas 库未安装，请运行: pip install pandas")
+        
+        logger.debug(f"开始提取 Excel 文本: {file_path}")
+        
+        try:
+            # 使用with语句确保文件句柄被正确关闭
+            with pd.ExcelFile(file_path) as excel_file:
+                sheet_names = excel_file.sheet_names
+                logger.info(f"Excel 文件共 {len(sheet_names)} 个工作表: {sheet_names}")
+                
+                all_text = []
+                
+                for sheet_name in sheet_names:
+                    logger.debug(f"正在处理工作表: {sheet_name}")
+                    
+                    # 读取工作表数据
+                    df = excel_file.parse(sheet_name)
+                    
+                    # 添加工作表标题
+                    all_text.append(f"\n=== 工作表: {sheet_name} ===\n")
+                    
+                    # 检查是否有数据
+                    if df.empty:
+                        logger.warning(f"工作表 {sheet_name} 为空")
+                        all_text.append("（此工作表为空）\n")
+                        continue
+                    
+                    logger.info(f"工作表 {sheet_name}: {df.shape[0]} 行 x {df.shape[1]} 列")
+                    
+                    # 限制处理的行数，避免内容过多
+                    max_rows = 100  # 限制每个工作表最多处理100行
+                    if df.shape[0] > max_rows:
+                        logger.warning(f"工作表 {sheet_name} 有 {df.shape[0]} 行，仅处理前 {max_rows} 行")
+                        df = df.head(max_rows)
+                        all_text.append(f"（注意：此工作表共 {df.shape[0]} 行，仅显示前 {max_rows} 行）\n")
+                    
+                    # 将DataFrame转换为结构化文本
+                    # 1. 添加列标题
+                    headers = df.columns.tolist()
+                    all_text.append(f"列标题: {' | '.join(str(h) for h in headers)}\n")
+                    
+                    # 2. 添加数据行
+                    for idx, row in df.iterrows():
+                        row_data = []
+                        for col in df.columns:
+                            cell_value = row[col]
+                            # 处理NaN值
+                            if pd.isna(cell_value):
+                                cell_value = ""
+                            else:
+                                cell_value = str(cell_value).strip()
+                                # 限制单元格内容长度
+                                if len(cell_value) > 50:
+                                    cell_value = cell_value[:50] + "..."
+                            row_data.append(cell_value)
+                        
+                        # 创建结构化的行文本
+                        row_text = " | ".join(row_data)
+                        all_text.append(f"第{idx+1}行: {row_text}\n")
+                    
+                    # 添加工作表分隔符
+                    all_text.append("\n" + "="*50 + "\n")
+            
+            # 合并所有文本
+            final_text = "".join(all_text)
+            logger.success(f"Excel 文本提取完成，总计 {len(final_text)} 字符")
+            return final_text
+            
+        except Exception as e:
+            logger.error(f"Excel 文本提取失败: {str(e)}")
+            raise Exception(f"Excel 文件读取失败: {str(e)}")
+    
     def _clean_text(self, text: str) -> str:
         """清理和预处理文本"""
         logger.debug("开始文本清理处理")
@@ -435,7 +524,7 @@ class DocumentProcessor:
         file_ext = os.path.splitext(file_path)[1].lower()
         
         # 支持的文件格式
-        supported_formats = ['.pdf', '.docx', '.txt', '.md', '.markdown', '.mdown', '.mkd']
+        supported_formats = ['.pdf', '.docx', '.txt', '.md', '.markdown', '.mdown', '.mkd', '.xlsx', '.xls']
         
         # 检查是否支持Markdown语义分块
         markdown_semantic = (self.enable_markdown_semantic and 
